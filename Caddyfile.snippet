@@ -1,15 +1,17 @@
 # ─────────────────────────────────────────────────────────────────────
-#  À ajouter dans le Caddyfile partagé de ton VPS.
+#  À ajouter dans le Caddyfile partagé du VPS.
 #
-#  Cave ne publie son port que sur la loopback (127.0.0.1:8093 par défaut,
-#  réglable via APP_PORT dans .env) : rien n'est exposé directement sur
-#  Internet, Caddy reste le seul point d'entrée TLS.
+#  Cave n'expose rien sur Internet : Caddy reste le seul point d'entrée TLS.
+#  Le Caddy du VPS étant lui-même conteneurisé, il joint Cave par son nom de
+#  service Docker — d'où le `networks` du docker-compose.yml, sans lequel
+#  `127.0.0.1:8093` désignerait le conteneur Caddy et renverrait 502.
 # ─────────────────────────────────────────────────────────────────────
 
-cave.tondomaine.fr {
-	reverse_proxy 127.0.0.1:8093
+cave.coffeecount.app {
+	reverse_proxy cave:3000
 
 	# Les photos d'étiquette montent jusqu'à ~2 Mo après redimensionnement.
+	# Sans cette ligne, Caddy plafonne à 10 Mo et le scan casse en silence.
 	request_body {
 		max_size 12MB
 	}

@@ -103,15 +103,18 @@ docker compose up -d
 docker compose logs cave  # le mot de passe admin s'affiche une seule fois
 ```
 
-Puis dans ton **Caddyfile partagé** (voir `Caddyfile.snippet`) :
+Puis dans le **Caddyfile partagé** (voir `Caddyfile.snippet`) :
 
 ```
 cave.tondomaine.fr {
-	reverse_proxy 127.0.0.1:8093
+	reverse_proxy cave:3000
 }
 ```
 
-Si le port 8093 est déjà pris par un autre projet du VPS, change `APP_PORT` dans `.env`.
+Le Caddy du VPS tourne lui-même dans un conteneur : depuis chez lui, `127.0.0.1` désigne
+Caddy et non l'hôte. Cave rejoint donc son réseau (`CADDY_NETWORK` dans `.env`) pour être
+joignable par son nom de service. Le port loopback ne sert plus qu'au diagnostic — s'il
+entre en conflit avec un autre projet du VPS, change `APP_PORT`.
 
 ### Déploiement automatique
 

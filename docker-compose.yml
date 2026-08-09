@@ -13,7 +13,11 @@ services:
     ports:
       # Publié sur la loopback uniquement : le Caddy partagé du VPS fait le TLS
       # et le routage. Rien n'est exposé directement sur Internet.
+      # Sert surtout au diagnostic (curl localhost:8093/api/health) — Caddy, lui,
+      # passe par le réseau Docker ci-dessous.
       - "127.0.0.1:${APP_PORT:-8093}:3000"
+    networks:
+      - caddy
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -25,3 +29,11 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+networks:
+  # Le Caddy partagé du VPS tourne lui-même dans un conteneur : depuis chez lui,
+  # `127.0.0.1` désigne Caddy, pas l'hôte. Cave rejoint donc son réseau pour être
+  # joignable par son nom de service — `reverse_proxy cave:3000`.
+  caddy:
+    external: true
+    name: ${CADDY_NETWORK:-caddy_default}

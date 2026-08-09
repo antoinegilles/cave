@@ -1,0 +1,269 @@
+@import 'tailwindcss';
+
+/* Le thème se pilote par une classe sur <html>, pas par la préférence système :
+   le choix retenu est « clair par défaut », y compris si l'OS est en sombre. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/**
+ * Jetons de thème.
+ *
+ * Les composants ne référencent JAMAIS une couleur brute — uniquement un rôle
+ * (`bg-surface`, `text-muted`, `border-line`). C'est ce qui permet de basculer les deux
+ * thèmes sans écrire une seule variante `dark:` dans les composants.
+ *
+ * Contrastes vérifiés AA (≥ 4.5:1) pour le texte dans les deux thèmes.
+ */
+:root {
+  /* ---------------------------------------------------------- clair */
+  --bg: #faf7f4;
+  --surface: #ffffff;
+  --surface-2: #f3ece5;
+  --surface-hover: #ece2d8;
+
+  /* Bordures franches et non des gris à 5 % d'opacité : la lisibilité des
+     séparations était le principal reproche sur la première version. */
+  --line: #d8cabb;
+  --line-strong: #b9a695;
+
+  --text: #241813;
+  --text-muted: #665348;
+  --text-faint: #8a7869;
+
+  --accent: #8b1e3f;
+  --accent-hover: #71182f;
+  --accent-text: #ffffff;
+  --accent-soft: #fbeef1;
+
+  --brass: #855510;
+  --brass-soft: #f6edda;
+
+  --success: #1f6b3a;
+  --success-soft: #e6f4ea;
+  --warning: #8a5a06;
+  --warning-soft: #fdf1da;
+  --danger: #a32036;
+  --danger-soft: #fdeaec;
+
+  --shadow: 0 1px 2px rgb(36 24 19 / 0.06), 0 4px 12px rgb(36 24 19 / 0.06);
+  --shadow-lg: 0 8px 30px rgb(36 24 19 / 0.14);
+
+  color-scheme: light;
+}
+
+.dark {
+  /* ---------------------------------------------------------- sombre */
+  --bg: #140a0e;
+  --surface: #1e1116;
+  --surface-2: #2a171e;
+  --surface-hover: #362029;
+
+  --line: #4a2f3a;
+  --line-strong: #6b4553;
+
+  --text: #f6ece3;
+  --text-muted: #bba79a;
+  --text-faint: #94806f;
+
+  --accent: #c9445f;
+  --accent-hover: #d95a74;
+  --accent-text: #ffffff;
+  --accent-soft: #38181f;
+
+  --brass: #dfb87d;
+  --brass-soft: #33261a;
+
+  --success: #6ec98a;
+  --success-soft: #16301f;
+  --warning: #e0b463;
+  --warning-soft: #33260f;
+  --danger: #ef8a97;
+  --danger-soft: #3a171c;
+
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 4px 12px rgb(0 0 0 / 0.3);
+  --shadow-lg: 0 8px 30px rgb(0 0 0 / 0.55);
+
+  color-scheme: dark;
+}
+
+/* Expose les jetons comme utilitaires Tailwind : bg-surface, text-muted, border-line… */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-hover: var(--surface-hover);
+
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+
+  --color-text: var(--text);
+  --color-muted: var(--text-muted);
+  --color-faint: var(--text-faint);
+
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-text: var(--accent-text);
+  --color-accent-soft: var(--accent-soft);
+
+  --color-brass: var(--brass);
+  --color-brass-soft: var(--brass-soft);
+
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+
+  --shadow-card: var(--shadow);
+  --shadow-float: var(--shadow-lg);
+
+  --font-display: Georgia, 'Times New Roman', serif;
+}
+
+/* Couleurs de vin — identité de la marque, identiques dans les deux thèmes.
+   Utilisées pour les bouteilles du plan de casier et les pastilles de couleur. */
+@theme {
+  --color-wine-red: #7d1a35;
+  --color-wine-white: #c9b25f;
+  --color-wine-rose: #e090a0;
+  --color-wine-sparkling: #d8b04f;
+  --color-wine-fortified: #8a4020;
+  --color-wine-dessert: #c08a25;
+}
+
+/* ------------------------------------------------------------------ base */
+
+html {
+  /* 17 px de base : le public visé est plutôt âgé, 14 px était trop petit. */
+  font-size: 17px;
+  background: var(--bg);
+}
+
+body {
+  min-height: 100dvh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  line-height: 1.6;
+  /* Évite le zoom involontaire au double-tap sur la grille du casier. */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  min-height: 100dvh;
+}
+
+/* La bascule de thème ne doit pas donner l'impression d'un rechargement. */
+body,
+button,
+input,
+select,
+textarea {
+  transition:
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    color 0.18s ease;
+}
+
+/* Anneau de focus net et visible dans les deux thèmes — indispensable au clavier. */
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Toute cible tactile atteint 44 px : recommandation d'accessibilité, et confort réel
+   pour une application manipulée debout, une bouteille dans l'autre main. */
+button,
+[role='button'],
+a.tap,
+select {
+  min-height: 44px;
+}
+
+input,
+textarea,
+select {
+  font-size: 1rem;
+  color: var(--text);
+  background: var(--surface);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-faint);
+}
+
+/* ------------------------------------------------------------ animations */
+
+/* Halo d'un emplacement retenu par la recherche. Pulsation lente et non clignotante :
+   ça se lit dans une cave, pas dans une salle d'arcade. */
+@keyframes slot-glow {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.slot-highlight {
+  animation: slot-glow 2.4s ease-in-out infinite;
+}
+
+/* Points de réflexion du sommelier pendant l'appel à l'IA. */
+@keyframes thinking-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+.thinking-dot {
+  animation: thinking-dot 1.2s ease-in-out infinite;
+}
+.thinking-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.thinking-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slot-highlight,
+  .thinking-dot {
+    animation: none;
+    opacity: 1;
+  }
+  * {
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* --------------------------------------------------------------- divers */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+/* Retire les flèches des champs numériques : sur un casier de 60 emplacements,
+   on saisit le numéro au clavier, on ne l'incrémente pas une à une. */
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}

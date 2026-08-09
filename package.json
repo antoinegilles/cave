@@ -1,0 +1,30 @@
+{
+  "name": "cave",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Cave à vin virtuelle auto-hébergée",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "dev": "npm run dev --workspace=@cave/server & npm run dev --workspace=@cave/web",
+    "build": "npm run build --workspace=@cave/shared && npm run build --workspace=@cave/server && npm run build --workspace=@cave/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
+    "test": "npm run test --workspaces --if-present",
+    "db:generate": "npm run db:generate --workspace=@cave/server",
+    "db:migrate": "npm run db:migrate --workspace=@cave/server",
+    "db:seed": "npm run db:seed --workspace=@cave/server"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "eslint": "^9.17.0",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.0"
+  }
+}

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#faf7f4" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#140a0e" media="(prefers-color-scheme: dark)" />
+    <meta name="description" content="Cave à vin virtuelle : chaque bouteille à son emplacement." />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>Cave</title>
+    <script>
+      // Applique le thème mémorisé AVANT le premier rendu : sans ce script inline,
+      // un utilisateur en thème sombre verrait un flash blanc à chaque chargement.
+      // Défaut volontaire : clair, même si le système est en sombre.
+      (function () {
+        try {
+          var t = localStorage.getItem('cave-theme');
+          if (t === 'dark') {
+            document.documentElement.classList.add('dark');
+            document.documentElement.style.colorScheme = 'dark';
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

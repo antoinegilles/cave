@@ -1,0 +1,23 @@
+# ─────────────────────────────────────────────────────────────────────
+#  À ajouter dans le Caddyfile partagé de ton VPS.
+#
+#  Cave ne publie son port que sur la loopback (127.0.0.1:8093 par défaut,
+#  réglable via APP_PORT dans .env) : rien n'est exposé directement sur
+#  Internet, Caddy reste le seul point d'entrée TLS.
+# ─────────────────────────────────────────────────────────────────────
+
+cave.tondomaine.fr {
+	reverse_proxy 127.0.0.1:8093
+
+	# Les photos d'étiquette montent jusqu'à ~2 Mo après redimensionnement.
+	request_body {
+		max_size 12MB
+	}
+
+	encode gzip zstd
+
+	log {
+		output file /var/log/caddy/cave.log
+		format json
+	}
+}

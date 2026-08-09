@@ -1,0 +1,27 @@
+services:
+  cave:
+    image: ${CAVE_IMAGE:-ghcr.io/antoinegilles/cave:latest}
+    container_name: cave
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: file:/app/data/cave.db
+    volumes:
+      # Base SQLite + photos d'étiquettes. C'est le seul état à sauvegarder.
+      - ./data:/app/data
+    ports:
+      # Publié sur la loopback uniquement : le Caddy partagé du VPS fait le TLS
+      # et le routage. Rien n'est exposé directement sur Internet.
+      - "127.0.0.1:${APP_PORT:-8093}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

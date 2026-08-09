@@ -1,0 +1,189 @@
+// Cave — schéma de données.
+// SQLite : un fichier unique, backup trivial via `sqlite3 .backup`.
+// Les champs "Json" sont stockés en TEXT sérialisé (SQLite n'a pas de type JSON natif côté Prisma).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String
+  passwordHash String
+  role         String    @default("USER") // ADMIN | USER
+  createdAt    DateTime  @default(now())
+  lastLoginAt  DateTime?
+
+  bottles   Bottle[]
+  aiQueries AiQuery[]
+  sessions  Session[]
+}
+
+/// Refresh tokens. Stockés hashés pour qu'une fuite de la base ne donne pas de session valide.
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  userAgent String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// Un casier physique. Les slots sont générés à la création et régénérés en cas de resize.
+model Rack {
+  id          String   @id @default(cuid())
+  name        String
+  rows        Int
+  cols        Int
+  numbering   String   @default("ROW_MAJOR") // ROW_MAJOR | COL_MAJOR
+  startNumber Int      @default(1)
+  position    Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  slots Slot[]
+}
+
+model Slot {
+  id     String @id @default(cuid())
+  rackId String
+  number Int
+  row    Int
+  col    Int
+
+  rack    Rack     @relation(fields: [rackId], references: [id], onDelete: Cascade)
+  bottles Bottle[]
+
+  @@unique([rackId, number])
+  @@unique([rackId, row, col])
+  @@index([rackId])
+}
+
+/// Catalogue dédupliqué : 6 bouteilles du même Bordeaux = 1 Wine + 6 Bottle.
+model Wine {
+  id          String  @id @default(cuid())
+  name        String
+  producer    String?
+  vintage     Int?
+  color       String? // RED | WHITE | ROSE | SPARKLING | FORTIFIED | DESSERT
+  country     String?
+  region      String?
+  appellation String?
+  grapes      String  @default("[]") // Json string[]
+  abv         Float?
+  description String?
+  producerUrl String?
+  imageUrl    String?
+
+  vivinoId          String? @unique
+  vivinoUrl         String?
+  vivinoRating      Float?
+  vivinoRatingCount Int?
+  priceAvg          Float?
+
+  /// Json { acidity, tannin, sweetness, intensity, fizziness } — valeurs 0-5 ou null.
+  structure String @default("{}")
+  /// Json string[] — arômes dominants (miel, minéral, fruits rouges…).
+  flavors   String @default("[]")
+
+  source    String   @default("MANUAL")
+  fetchedAt DateTime @default(now())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Clé de déduplication : normalize(producer + name + vintage).
+  dedupeKey String @unique
+
+  bottles  Bottle[]
+  foodTags WineFoodTag[]
+
+  @@index([color])
+  @@index([region])
+  @@index([vintage])
+}
+
+/// Référentiel canonique des accords, seedé depuis @cave/shared FOOD_TAGS.
+model FoodTag {
+  id      String @id @default(cuid())
+  slug    String @unique
+  labelFr String
+  emoji   String @default("")
+
+  wines WineFoodTag[]
+}
+
+model WineFoodTag {
+  wineId    String
+  foodTagId String
+
+  wine    Wine    @relation(fields: [wineId], references: [id], onDelete: Cascade)
+  foodTag FoodTag @relation(fields: [foodTagId], references: [id], onDelete: Cascade)
+
+  @@id([wineId, foodTagId])
+  @@index([foodTagId])
+}
+
+model Bottle {
+  id             String    @id @default(cuid())
+  wineId         String
+  slotId         String?
+  status         String    @default("IN_CELLAR") // IN_CELLAR | DRUNK
+  addedById      String
+  addedAt        DateTime  @default(now())
+  drunkAt        DateTime?
+  personalNote   String?
+  personalRating Float?
+  purchasePrice  Float?
+  labelPhotoPath String?
+
+  wine    Wine  @relation(fields: [wineId], references: [id], onDelete: Restrict)
+  slot    Slot? @relation(fields: [slotId], references: [id], onDelete: SetNull)
+  addedBy User  @relation(fields: [addedById], references: [id], onDelete: Restrict)
+
+  @@index([wineId])
+  @@index([slotId])
+  @@index([status])
+}
+
+/// Journal des appels IA. Sert au comptage du quota (3/jour/utilisateur) et à l'audit.
+/// Le quota vit ici et pas en mémoire : il survit aux redémarrages du conteneur.
+model AiQuery {
+  id        String   @id @default(cuid())
+  userId    String
+  prompt    String
+  response  String?
+  tokensIn  Int?
+  tokensOut Int?
+  error     String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model FeatureFlag {
+  key       String   @id
+  enabled   Boolean  @default(false)
+  updatedAt DateTime @updatedAt
+}
+
+/// Cache permanent des pages scrapées : un vin n'est récupéré qu'une seule fois.
+model ScrapeCache {
+  url       String   @id
+  payload   String
+  status    Int
+  fetchedAt DateTime @default(now())
+
+  @@index([fetchedAt])
+}

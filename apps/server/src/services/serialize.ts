@@ -1,4 +1,5 @@
-import type { WineStructure } from '@cave/shared'
+import type { WineData, WineStructure } from '@cave/shared'
+import { getFoodTag } from '@cave/shared'
 
 /** Formes Prisma minimales attendues — évite d'importer les types générés partout. */
 interface WineRow {
@@ -80,6 +81,28 @@ export function serializeWine(wine: WineRow) {
     flavors: parseJson<string[]>(wine.flavors, []),
     source: wine.source,
     foodTags: (wine.foodTags ?? []).map((ft) => ft.foodTag),
+  }
+}
+
+/**
+ * Hydrate une fiche fraîchement récupérée chez un provider pour l'envoyer au front.
+ *
+ * Deux formes de `foodTags` circulaient sous le même nom `wine` : les fiches en base
+ * passent par `serializeWine` et sortent en objets `{ slug, labelFr, emoji }`, tandis que
+ * les providers ne produisent que des slugs. Le front n'en connaît qu'une — il affiche
+ * `food.emoji` et renvoie `f.slug` à l'ajout. Sur des chaînes, les puces d'accords
+ * sortaient vides puis `POST /api/bottles` échouait en 400, `f.slug` valant `undefined`.
+ *
+ * Les slugs absents du référentiel sont écartés : c'est déjà ce que fait `syncFoodTags`
+ * à l'écriture, autant ne pas afficher un accord qu'on ne saurait pas persister.
+ */
+export function serializeWineData(wine: WineData) {
+  return {
+    ...wine,
+    foodTags: wine.foodTags.flatMap((slug) => {
+      const tag = getFoodTag(slug)
+      return tag ? [{ slug: tag.slug, labelFr: tag.labelFr, emoji: tag.emoji }] : []
+    }),
   }
 }
 

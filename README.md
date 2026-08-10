@@ -99,6 +99,11 @@ curl -o .env https://raw.githubusercontent.com/antoinegilles/cave/main/.env.exam
 # Renseigner .env — a minima JWT_SECRET
 openssl rand -hex 32     # → JWT_SECRET
 
+# Le conteneur écrit sous l'uid 1001 ; sans ce chown, Docker crée data/ en root
+# et Prisma échoue sur « unable to open database file ». Le groupe 1000 (l'utilisateur
+# du VPS) et le 775 sont ce qui permet ensuite à backup.sh de sortir son fichier temporaire.
+mkdir -p data && sudo chown 1001:1000 data && chmod 775 data
+
 docker compose up -d
 docker compose logs cave  # le mot de passe admin s'affiche une seule fois
 ```

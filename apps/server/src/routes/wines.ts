@@ -1,10 +1,12 @@
 import { labelExtractionSchema } from '@cave/shared'
+import type { WineData } from '@cave/shared'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { config } from '../config.js'
 import { providerStatus, resolveBarcode, resolveFromLabel, resolveVivino, searchWines } from '../providers/chain.js'
 import { GeminiError, isGeminiConfigured } from '../services/gemini.js'
 import { extractLabel } from '../services/labelScan.js'
+import { serializeWineData } from '../services/serialize.js'
 
 /** ~8 Mo de base64 ≈ 6 Mo d'image : très au-delà d'une photo redimensionnée à 1024 px. */
 const MAX_IMAGE_BASE64 = 8 * 1024 * 1024
@@ -14,6 +16,14 @@ const scanSchema = z.object({
   imageBase64: z.string().min(100).max(MAX_IMAGE_BASE64),
   mimeType: z.enum(ALLOWED_MIME as [string, ...string[]]),
 })
+
+/**
+ * Toute fiche qui sort d'ici part vers le front : elle doit porter les accords sous la
+ * même forme que celles issues de la base, sans quoi l'ajout de bouteille échoue en 400.
+ */
+function serializeResolveResult<T extends { wine: WineData | null }>(result: T) {
+  return { ...result, wine: result.wine ? serializeWineData(result.wine) : null }
+}
 
 export default async function wineRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate)
@@ -41,7 +51,7 @@ export default async function wineRoutes(app: FastifyInstance) {
       try {
         const { extraction } = await extractLabel(parsed.data.imageBase64, parsed.data.mimeType)
         const result = await resolveFromLabel(extraction)
-        return { extraction, ...result }
+        return { extraction, ...serializeResolveResult(result) }
       } catch (error) {
         if (error instanceof GeminiError) {
           // L'utilisateur doit pouvoir enchaîner en saisie manuelle, pas rester bloqué.
@@ -57,7 +67,7 @@ export default async function wineRoutes(app: FastifyInstance) {
     const parsed = z.object({ barcode: z.string().regex(/^\d{8,14}$/) }).safeParse(req.body)
     if (!parsed.success) return reply.code(400).send({ error: 'Code-barres invalide' })
 
-    return resolveBarcode(parsed.data.barcode)
+    return serializeResolveResult(await resolveBarcode(parsed.data.barcode))
   })
 
   /** Recherche texte manuelle — la troisième voie de saisie, toujours disponible. */
@@ -76,7 +86,7 @@ export default async function wineRoutes(app: FastifyInstance) {
     const wine = await resolveVivino(wineId)
     if (!wine) return reply.code(404).send({ error: 'Fiche introuvable', providerStatus: providerStatus() })
 
-    return { wine, providerStatus: providerStatus() }
+    return { wine: serializeWineData(wine), providerStatus: providerStatus() }
   })
 
   /** Résolution à partir de champs saisis à la main, sans photo. */
@@ -86,14 +96,16 @@ export default async function wineRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Requête invalide', issues: parsed.error.issues })
     }
 
-    return resolveFromLabel({
-      producer: parsed.data.producer ?? null,
-      cuvee: parsed.data.cuvee ?? null,
-      appellation: parsed.data.appellation ?? null,
-      vintage: parsed.data.vintage ?? null,
-      color: parsed.data.color ?? null,
-      country: parsed.data.country ?? null,
-    })
+    return serializeResolveResult(
+      await resolveFromLabel({
+        producer: parsed.data.producer ?? null,
+        cuvee: parsed.data.cuvee ?? null,
+        appellation: parsed.data.appellation ?? null,
+        vintage: parsed.data.vintage ?? null,
+        color: parsed.data.color ?? null,
+        country: parsed.data.country ?? null,
+      }),
+    )
   })
 
   app.get('/providers/status', async () => ({

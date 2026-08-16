@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { WINE_COLOR_HEX, WINE_COLOR_LABELS, type WineColor } from '@cave/shared'
 import { computed, onMounted, ref } from 'vue'
+import MeterRow from '../components/MeterRow.vue'
 import { api } from '../lib/api'
 
 interface Stats {
@@ -84,19 +85,15 @@ const regionRows = computed(() => {
           Répartition par couleur
         </h2>
         <div v-if="colorRows.length === 0" class="text-sm text-faint">Cave vide.</div>
-        <div v-else class="space-y-2">
-          <div v-for="row in colorRows" :key="row.color" class="flex items-center gap-3">
-            <span class="w-28 shrink-0 text-sm text-muted">{{ row.label }}</span>
-            <div class="h-3 flex-1 overflow-hidden rounded-full bg-surface-2">
-              <div
-                class="h-full rounded-full transition-all"
-                :style="{ width: `${row.percent}%`, backgroundColor: row.hex }"
-              />
-            </div>
-            <span class="w-16 shrink-0 text-right text-sm tabular-nums text-muted">
-              {{ row.count }} · {{ row.percent }}%
-            </span>
-          </div>
+        <div v-else class="space-y-3">
+          <MeterRow
+            v-for="row in colorRows"
+            :key="row.color"
+            :label="row.label"
+            :value="`${row.count} · ${row.percent} %`"
+            :percent="row.percent"
+            :color="row.hex"
+          />
         </div>
       </div>
 
@@ -105,16 +102,15 @@ const regionRows = computed(() => {
           Principales régions
         </h2>
         <div v-if="regionRows.length === 0" class="text-sm text-faint">Aucune région connue.</div>
-        <div v-else class="space-y-2">
-          <div v-for="row in regionRows" :key="row.region" class="flex items-center gap-3">
-            <span class="w-40 shrink-0 truncate text-sm text-muted">{{ row.region }}</span>
-            <div class="h-3 flex-1 overflow-hidden rounded-full bg-surface-2">
-              <div class="h-full rounded-full bg-accent" :style="{ width: `${row.percent}%` }" />
-            </div>
-            <span class="w-8 shrink-0 text-right text-sm tabular-nums text-muted">
-              {{ row.count }}
-            </span>
-          </div>
+        <div v-else class="space-y-3">
+          <MeterRow
+            v-for="row in regionRows"
+            :key="row.region"
+            :label="row.region"
+            :value="String(row.count)"
+            :percent="row.percent"
+            color="var(--accent)"
+          />
         </div>
       </div>
     </template>

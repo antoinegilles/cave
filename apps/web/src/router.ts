@@ -1,3 +1,4 @@
+import { nextTick } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from './stores/auth'
 
@@ -14,7 +15,22 @@ const router = createRouter({
     { path: '/admin', name: 'admin', component: () => import('./views/AdminView.vue'), meta: { admin: true } },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
-  scrollBehavior: () => ({ top: 0 }),
+  /**
+   * Un retour arrière doit retrouver sa place.
+   *
+   * Le retour en haut était inconditionnel : ouvrir une bouteille depuis le bas d'une
+   * liste de soixante, puis revenir, renvoyait tout en haut. Le `nextTick` laisse la vue
+   * se reconstruire depuis le store avant que le navigateur ne restitue l'offset — sans
+   * lui, la page est encore trop courte pour l'atteindre.
+   */
+  scrollBehavior: async (to, _from, savedPosition) => {
+    if (savedPosition) {
+      await nextTick()
+      return savedPosition
+    }
+    if (to.hash) return { el: to.hash, behavior: 'smooth' }
+    return { top: 0 }
+  },
 })
 
 router.beforeEach((to) => {

@@ -1,0 +1,60 @@
+import { createPinia, setActivePinia } from 'pinia'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const { post } = vi.hoisted(() => ({ post: vi.fn() }))
+
+vi.mock('../lib/api', () => ({ api: { post, get: vi.fn() } }))
+
+import type { SearchResult } from '../lib/types'
+import { useCellarStore } from './cellar'
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
+function result(total: number): SearchResult {
+  return { bottles: [], matchedSlots: [], total, interpretedFoodTags: [] }
+}
+
+describe('recherche de la cave', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    post.mockReset()
+  })
+
+  it('conserve la dernière réponse quand les requêtes arrivent dans le désordre', async () => {
+    const first = deferred<SearchResult>()
+    const second = deferred<SearchResult>()
+    post.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    const cellar = useCellarStore()
+
+    const firstSearch = cellar.search({ colors: ['RED'] }, 'Rouge')
+    const secondSearch = cellar.search({ colors: ['WHITE'] }, 'Blanc')
+
+    second.resolve(result(2))
+    await secondSearch
+    first.resolve(result(8))
+    await firstSearch
+
+    expect(cellar.searchResult?.total).toBe(2)
+    expect(cellar.searchLabel).toBe('Blanc')
+  })
+
+  it('n’active pas une réponse revenue après l’effacement du dernier filtre', async () => {
+    const pending = deferred<SearchResult>()
+    post.mockReturnValueOnce(pending.promise)
+    const cellar = useCellarStore()
+
+    const search = cellar.search({ colors: ['RED'] }, 'Rouge')
+    cellar.clearSearch()
+    pending.resolve(result(3))
+    await search
+
+    expect(cellar.searchActive).toBe(false)
+    expect(cellar.searchResult).toBeNull()
+  })
+})

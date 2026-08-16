@@ -15,27 +15,27 @@
  */
 :root {
   /* ---------------------------------------------------------- clair */
-  --bg: #faf7f4;
+  --bg: #f7f7f8;
   --surface: #ffffff;
-  --surface-2: #f3ece5;
-  --surface-hover: #ece2d8;
+  --surface-2: #f1f1f3;
+  --surface-hover: #e9e9ec;
 
   /* Bordures franches et non des gris à 5 % d'opacité : la lisibilité des
      séparations était le principal reproche sur la première version. */
-  --line: #d8cabb;
-  --line-strong: #b9a695;
+  --line: #dedee3;
+  --line-strong: #c4c4cc;
 
-  --text: #241813;
-  --text-muted: #665348;
-  --text-faint: #8a7869;
+  --text: #18181b;
+  --text-muted: #52525b;
+  --text-faint: #71717a;
 
-  --accent: #8b1e3f;
-  --accent-hover: #71182f;
+  --accent: #9f1239;
+  --accent-hover: #881337;
   --accent-text: #ffffff;
-  --accent-soft: #fbeef1;
+  --accent-soft: #fff1f2;
 
-  --brass: #855510;
-  --brass-soft: #f6edda;
+  --brass: #854d0e;
+  --brass-soft: #fef9c3;
 
   --success: #1f6b3a;
   --success-soft: #e6f4ea;
@@ -44,33 +44,33 @@
   --danger: #a32036;
   --danger-soft: #fdeaec;
 
-  --shadow: 0 1px 2px rgb(36 24 19 / 0.06), 0 4px 12px rgb(36 24 19 / 0.06);
-  --shadow-lg: 0 8px 30px rgb(36 24 19 / 0.14);
+  --shadow: 0 1px 2px rgb(24 24 27 / 0.05), 0 6px 18px rgb(24 24 27 / 0.06);
+  --shadow-lg: 0 18px 45px rgb(24 24 27 / 0.16);
 
   color-scheme: light;
 }
 
 .dark {
   /* ---------------------------------------------------------- sombre */
-  --bg: #140a0e;
-  --surface: #1e1116;
-  --surface-2: #2a171e;
-  --surface-hover: #362029;
+  --bg: #09090b;
+  --surface: #18181b;
+  --surface-2: #27272a;
+  --surface-hover: #3f3f46;
 
-  --line: #4a2f3a;
-  --line-strong: #6b4553;
+  --line: #3f3f46;
+  --line-strong: #52525b;
 
-  --text: #f6ece3;
-  --text-muted: #bba79a;
-  --text-faint: #94806f;
+  --text: #fafafa;
+  --text-muted: #d4d4d8;
+  --text-faint: #a1a1aa;
 
-  --accent: #c9445f;
-  --accent-hover: #d95a74;
-  --accent-text: #ffffff;
-  --accent-soft: #38181f;
+  --accent: #fb7185;
+  --accent-hover: #fda4af;
+  --accent-text: #18181b;
+  --accent-soft: #4c0519;
 
-  --brass: #dfb87d;
-  --brass-soft: #33261a;
+  --brass: #facc15;
+  --brass-soft: #422006;
 
   --success: #6ec98a;
   --success-soft: #16301f;
@@ -79,8 +79,8 @@
   --danger: #ef8a97;
   --danger-soft: #3a171c;
 
-  --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 4px 12px rgb(0 0 0 / 0.3);
-  --shadow-lg: 0 8px 30px rgb(0 0 0 / 0.55);
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.45), 0 8px 20px rgb(0 0 0 / 0.3);
+  --shadow-lg: 0 20px 50px rgb(0 0 0 / 0.6);
 
   color-scheme: dark;
 }
@@ -117,7 +117,7 @@
   --shadow-card: var(--shadow);
   --shadow-float: var(--shadow-lg);
 
-  --font-display: Georgia, 'Times New Roman', serif;
+  --font-display: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
 }
 
 /* Couleurs de vin — identité de la marque, identiques dans les deux thèmes.
@@ -141,7 +141,9 @@ html {
 
 body {
   min-height: 100dvh;
-  background: var(--bg);
+  background:
+    radial-gradient(circle at 15% -10%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 32rem),
+    var(--bg);
   color: var(--text);
   font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
   line-height: 1.6;
@@ -149,6 +151,11 @@ body {
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
   -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  color: var(--accent-text);
+  background: var(--accent);
 }
 
 #app {

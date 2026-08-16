@@ -1,10 +1,28 @@
 <script setup lang="ts">
-import { FOOD_TAGS, STRUCTURE_LABELS, WINE_COLORS, WINE_COLOR_LABELS } from '@cave/shared'
+import { FOOD_TAGS, STRUCTURE_LABELS, WINE_COLOR_LABELS } from '@cave/shared'
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  FunnelIcon,
+  LightBulbIcon,
+  ListBulletIcon,
+  MagnifyingGlassIcon,
+  SparklesIcon,
+  Squares2X2Icon,
+  XMarkIcon,
+} from '@heroicons/vue/24/outline'
 import { computed, onMounted, ref } from 'vue'
+import BottomSheet from './BottomSheet.vue'
+import SearchFilters from './SearchFilters.vue'
 import { ApiError, api } from '../lib/api'
+import { groupedSlotAnswer } from '../lib/format'
 import { decideSearchMode } from '../lib/searchIntent'
+import { resolveRecommendationSlots } from '../lib/sommelierSlots'
+import { useHoverPointer } from '../lib/useMediaQuery'
 import type { SommelierResult, SommelierStatus } from '../lib/types'
 import { useCellarStore } from '../stores/cellar'
+import { usePrefsStore } from '../stores/prefs'
+import type { ListSort } from '../lib/bottleSort'
 
 /**
  * Recherche unifiée.
@@ -20,6 +38,12 @@ import { useCellarStore } from '../stores/cellar'
  */
 
 const cellar = useCellarStore()
+const prefs = usePrefsStore()
+const hoverPointer = useHoverPointer()
+
+const input = ref<HTMLInputElement | null>(null)
+/** L'onglet « Chercher » de la barre basse amène ici et ouvre le clavier. */
+defineExpose({ focus: () => input.value?.focus() })
 
 const query = ref('')
 const showFilters = ref(false)
@@ -32,20 +56,30 @@ const searching = ref(false)
 const aiThinking = ref(false)
 const aiResult = ref<SommelierResult | null>(null)
 const aiError = ref<string | null>(null)
+const sqlError = ref<string | null>(null)
 const lastMode = ref<'sql' | 'ai' | null>(null)
 const forceSql = ref(false)
+let interactionId = 0
+
+const SORTS: { key: ListSort; label: string }[] = [
+  { key: 'slot', label: 'Emplacement' },
+  { key: 'name', label: 'Nom' },
+  { key: 'rating', label: 'Note' },
+  { key: 'vintage', label: 'Millésime' },
+]
 
 const sommelier = ref<SommelierStatus | null>(null)
 
-const structureAxes = ['tannin', 'acidity', 'sweetness', 'intensity'] as const
-
-const hasFilters = computed(
+/** Le compteur du bouton oubliait la note et le profil : « Filtres · 2 » pour 4 filtres. */
+const activeFilterCount = computed(
   () =>
-    selectedColors.value.length > 0 ||
-    selectedFoods.value.length > 0 ||
-    minRating.value !== null ||
-    Object.keys(structureBounds.value).length > 0,
+    selectedColors.value.length +
+    selectedFoods.value.length +
+    (minRating.value !== null ? 1 : 0) +
+    Object.keys(structureBounds.value).length,
 )
+
+const hasFilters = computed(() => activeFilterCount.value > 0)
 
 const aiAvailable = computed(() => Boolean(sommelier.value?.enabled))
 const quotaRemaining = computed(() => sommelier.value?.remaining ?? 0)
@@ -69,36 +103,62 @@ onMounted(async () => {
   }
 })
 
-function toggle(list: string[], item: string): void {
-  const index = list.indexOf(item)
-  if (index === -1) list.push(item)
-  else list.splice(index, 1)
+function clearFilters(refresh = false): void {
+  selectedColors.value = []
+  selectedFoods.value = []
+  minRating.value = null
+  structureBounds.value = {}
+  if (refresh) void refreshFromFilters()
 }
 
-function toggleStructure(axis: string): void {
-  if (structureBounds.value[axis]) {
-    const next = { ...structureBounds.value }
-    delete next[axis]
-    structureBounds.value = next
-  } else {
-    // « Plutôt tannique » = moitié haute de l'échelle.
-    structureBounds.value = { ...structureBounds.value, [axis]: [3, 5] }
-  }
+/** Les facettes sont déjà appliquées ; l'action mobile ne fait que fermer la feuille. */
+function applyFilters(): void {
+  showFilters.value = false
+}
+
+function updateColors(value: string[]): void {
+  selectedColors.value = value
+  void refreshFromFilters()
+}
+
+function updateFoods(value: string[]): void {
+  selectedFoods.value = value
+  void refreshFromFilters()
+}
+
+function updateMinRating(value: number | null): void {
+  minRating.value = value
+  void refreshFromFilters()
+}
+
+function updateStructure(value: Record<string, [number, number]>): void {
+  structureBounds.value = value
+  void refreshFromFilters()
+}
+
+/** Une puce d'emplacement bascule sur le plan et l'y emmène. */
+function goToSlot(rackId: string, number: number): void {
+  prefs.viewMode = 'rack'
+  cellar.focusSlot(rackId, number)
 }
 
 function searchLabel(): string {
-  return (
-    query.value.trim() ||
-    [
-      ...selectedColors.value.map((c) => WINE_COLOR_LABELS[c as keyof typeof WINE_COLOR_LABELS]),
-      ...selectedFoods.value.map((f) => FOOD_TAGS.find((t) => t.slug === f)?.labelFr ?? f),
-    ].join(', ')
-  )
+  return [
+    query.value.trim(),
+    ...selectedColors.value.map((c) => WINE_COLOR_LABELS[c as keyof typeof WINE_COLOR_LABELS]),
+    ...selectedFoods.value.map((f) => FOOD_TAGS.find((t) => t.slug === f)?.labelFr ?? f),
+    ...Object.keys(structureBounds.value).map(
+      (axis) => STRUCTURE_LABELS[axis as keyof typeof STRUCTURE_LABELS] ?? axis,
+    ),
+    minRating.value !== null ? `Note ${minRating.value}+` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
 }
 
 /** Recherche SQL — toujours exécutée, c'est le socle. */
-async function runSql(): Promise<void> {
-  await cellar.search(
+async function runSql(): Promise<boolean> {
+  const result = await cellar.search(
     {
       q: query.value.trim() || undefined,
       colors: selectedColors.value.length ? selectedColors.value : undefined,
@@ -109,48 +169,78 @@ async function runSql(): Promise<void> {
     },
     searchLabel(),
   )
+  return cellar.searchResult === result
 }
 
-async function runAi(): Promise<void> {
+async function runAi(currentInteraction: number): Promise<void> {
   aiThinking.value = true
   aiError.value = null
   try {
     const result = await api.post<SommelierResult>('/api/ai/sommelier', {
       prompt: query.value.trim(),
     })
+    if (currentInteraction !== interactionId) return
     aiResult.value = result
     if (sommelier.value) sommelier.value.remaining = result.quotaRemaining
 
-    // Le sommelier réutilise le mécanisme d'allumage de la recherche classique :
-    // un seul chemin de rendu pour les deux moteurs.
-    const keys = result.recommendations
-      .filter((r) => r.slotNumber !== null)
-      .map((r) => {
-        const rack = cellar.racks.find((rk) => rk.name === r.rackName) ?? cellar.activeRack
-        return rack ? cellar.slotKey(rack.id, r.slotNumber!) : ''
-      })
-      .filter(Boolean)
-
+    // Le sommelier réutilise le mécanisme d'allumage de la recherche classique : un seul
+    // chemin de rendu pour les deux moteurs. La résolution du casier est déléguée, car
+    // le repli « sinon le casier actif » allumait le bon numéro sur le mauvais meuble.
+    const keys = resolveRecommendationSlots(result.recommendations, cellar.racks)
     if (keys.length > 0) cellar.applyHighlight(keys, query.value.trim())
   } catch (e) {
+    if (currentInteraction !== interactionId) return
     const error = e as ApiError
     aiError.value = error.message
     if (error.status === 429 && sommelier.value) sommelier.value.remaining = 0
   } finally {
-    aiThinking.value = false
+    if (currentInteraction === interactionId) aiThinking.value = false
+  }
+}
+
+/**
+ * Un clic de facette ne passe que par la recherche SQL. Le compteur monotone protège
+ * aussi la réponse IA éventuellement encore en vol d'une validation précédente.
+ */
+async function refreshFromFilters(): Promise<void> {
+  const currentInteraction = ++interactionId
+  aiThinking.value = false
+  aiResult.value = null
+  aiError.value = null
+  sqlError.value = null
+  lastMode.value = 'sql'
+  forceSql.value = false
+
+  if (!query.value.trim() && !hasFilters.value) {
+    cellar.clearSearch()
+    searching.value = false
+    lastMode.value = null
+    return
+  }
+
+  searching.value = true
+  try {
+    await runSql()
+  } catch (error) {
+    if (currentInteraction === interactionId) sqlError.value = (error as Error).message
+  } finally {
+    if (currentInteraction === interactionId) searching.value = false
   }
 }
 
 /** Point d'entrée unique : déclenché par Entrée ou par le bouton, jamais à la frappe. */
 async function submit(): Promise<void> {
+  if (searching.value) return
   if (!query.value.trim() && !hasFilters.value) {
     reset()
     return
   }
 
+  const currentInteraction = ++interactionId
   searching.value = true
   aiResult.value = null
   aiError.value = null
+  sqlError.value = null
 
   const decision = decideSearchMode(query.value, {
     submitted: true,
@@ -163,11 +253,17 @@ async function submit(): Promise<void> {
   try {
     // Le SQL part en premier et sans attendre l'IA : l'utilisateur a une réponse
     // affichée en quelques millisecondes, l'IA vient l'enrichir ensuite.
-    await runSql()
-    if (decision.mode === 'ai') await runAi()
+    const applied = await runSql()
+    if (applied && currentInteraction === interactionId && decision.mode === 'ai') {
+      await runAi(currentInteraction)
+    }
+  } catch (error) {
+    if (currentInteraction === interactionId) sqlError.value = (error as Error).message
   } finally {
-    searching.value = false
-    forceSql.value = false
+    if (currentInteraction === interactionId) {
+      searching.value = false
+      forceSql.value = false
+    }
   }
 }
 
@@ -176,109 +272,150 @@ async function retryWithoutAi(): Promise<void> {
   forceSql.value = true
   aiResult.value = null
   aiError.value = null
+  sqlError.value = null
   await submit()
 }
 
 function reset(): void {
+  interactionId += 1
   query.value = ''
-  selectedColors.value = []
-  selectedFoods.value = []
-  minRating.value = null
-  structureBounds.value = {}
+  clearFilters()
   aiResult.value = null
   aiError.value = null
+  sqlError.value = null
   lastMode.value = null
   cellar.clearSearch()
 }
 
-const matchedSlotNumbers = computed(() =>
-  [...cellar.highlightedSlots]
-    .map((k) => Number(k.split(':')[1]))
-    .sort((a, b) => a - b)
-    .join(', '),
+const total = computed(() => cellar.searchResult?.total ?? 0)
+
+/** Ce que le lecteur d'écran énonce après une recherche. */
+const announcement = computed(() =>
+  groupedSlotAnswer(
+    total.value,
+    cellar.searchLabel,
+    cellar.matchedByRack.map((group) => ({
+      rackName: group.rack.name,
+      numbers: group.numbers,
+    })),
+  ),
 )
+
+/** Ce que ferait une validation maintenant, en une ligne. */
+const modeHint = computed(() => {
+  if (!query.value.trim() || cellar.searchActive || searching.value) return null
+  if (pendingDecision.value.mode === 'ai') {
+    return `Cette question sera envoyée au sommelier (${quotaRemaining.value} sur ${sommelier.value?.dailyQuota} restantes aujourd'hui)`
+  }
+  if (pendingDecision.value.reason === 'no-quota') {
+    return 'Recherche instantanée — quota du sommelier épuisé pour aujourd’hui'
+  }
+  return 'Recherche instantanée dans ta cave'
+})
 </script>
 
 <template>
   <section class="space-y-3">
-    <!-- Champ unique -->
-    <div class="flex gap-2">
-      <div class="relative flex-1">
+    <div class="relative">
         <label for="cave-search" class="sr-only">Rechercher un vin</label>
-        <span
-          class="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-lg"
-          aria-hidden="true"
-        >
-          {{ pendingDecision.mode === 'ai' ? '✨' : '🔍' }}
-        </span>
         <input
           id="cave-search"
+          ref="input"
           v-model="query"
           type="search"
-          placeholder="Un plat, un domaine, une région…"
-          class="w-full rounded-xl border border-line bg-surface py-3.5 pl-12 text-text outline-none focus:border-accent"
-          :class="sommelier?.enabled ? 'pr-24' : 'pr-4'"
+          placeholder="Un plat, un domaine..."
+          class="w-full rounded-2xl border border-line bg-surface py-3.5 pl-4 pr-14 text-text shadow-card outline-none focus:border-accent"
           @keydown.enter="submit"
         />
-
-        <!-- Compteur de recherches IA, dans le champ : rappelle en permanence que la
-             fonctionnalité existe et combien de crédits il reste, sans occuper de place. -->
-        <span
-          v-if="sommelier?.enabled"
-          class="pointer-events-none absolute right-2.5 top-1/2 flex -translate-y-1/2 items-center gap-1 rounded-full border px-2.5 py-1 text-sm font-semibold tabular-nums"
-          :class="
-            quotaRemaining > 0
-              ? 'border-accent bg-accent-soft text-accent'
-              : 'border-line bg-surface-2 text-faint'
-          "
-          :title="
-            quotaRemaining > 0
-              ? `${quotaRemaining} recherche(s) sommelier IA disponible(s) aujourd'hui`
-              : 'Quota du sommelier IA épuisé — la recherche classique reste illimitée'
-          "
-        >
-          <span aria-hidden="true">✨</span>
-          {{ quotaRemaining }}<span class="opacity-60">/{{ sommelier.dailyQuota }}</span>
-          <span class="sr-only">
-            recherches avec l'intelligence artificielle restantes aujourd'hui
-          </span>
-        </span>
-      </div>
-
       <button
         type="button"
-        class="rounded-xl border px-4 font-medium transition-colors"
-        :class="
-          showFilters || hasFilters
-            ? 'border-accent bg-accent-soft text-accent'
-            : 'border-line text-muted hover:bg-surface-hover'
-        "
-        :aria-expanded="showFilters"
-        @click="showFilters = !showFilters"
-      >
-        Filtres<span v-if="hasFilters"> · {{ selectedColors.length + selectedFoods.length }}</span>
-      </button>
-
-      <button
-        type="button"
-        class="rounded-xl bg-accent px-6 font-semibold text-accent-text transition-colors hover:bg-accent-hover disabled:opacity-50"
+        class="absolute right-1.5 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-xl bg-accent text-accent-text transition-colors hover:bg-accent-hover disabled:opacity-50"
         :disabled="searching"
+        aria-label="Lancer la recherche"
         @click="submit"
       >
-        {{ searching ? '…' : 'Chercher' }}
+        <MagnifyingGlassIcon class="h-5 w-5" :class="searching ? 'animate-pulse' : ''" aria-hidden="true" />
       </button>
     </div>
 
-    <!-- Annonce du mode AVANT validation : l'utilisateur sait ce qui va se passer -->
-    <p v-if="query.trim() && !cellar.searchActive && !searching" class="px-1 text-sm text-faint">
-      <template v-if="pendingDecision.mode === 'ai'">
-        ✨ Cette question sera envoyée au sommelier
-        <span class="text-muted">({{ quotaRemaining }} sur {{ sommelier?.dailyQuota }} restantes aujourd'hui)</span>
-      </template>
-      <template v-else-if="pendingDecision.reason === 'no-quota'">
-        🔍 Recherche instantanée — quota du sommelier épuisé pour aujourd'hui
-      </template>
-      <template v-else> 🔍 Recherche instantanée dans ta cave </template>
+    <!-- Ligne d'état : annonce le mode AVANT validation, et porte le quota sur téléphone. -->
+    <p
+      v-if="modeHint || sommelier?.enabled"
+      class="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-sm text-faint"
+    >
+      <span v-if="modeHint">{{ modeHint }}</span>
+      <span
+        v-if="sommelier?.enabled"
+        class="inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-sm font-semibold tabular-nums"
+        :class="
+          quotaRemaining > 0
+            ? 'border-accent bg-accent-soft text-accent'
+            : 'border-line bg-surface-2 text-faint'
+        "
+      >
+        <SparklesIcon class="h-4 w-4" aria-hidden="true" /> {{ quotaRemaining }}/{{ sommelier.dailyQuota }}
+        <span class="sr-only">recherches sommelier restantes aujourd'hui</span>
+      </span>
+    </p>
+
+    <!-- Organisation de la collection : une seule barre compacte, disponible à 320 px. -->
+    <div class="flex flex-wrap items-center gap-1 rounded-2xl border border-line bg-surface p-1.5 shadow-card" aria-label="Organiser la collection">
+      <button
+        type="button"
+        class="inline-flex items-center gap-1.5 rounded-xl px-2.5 text-sm font-medium transition-colors"
+        :class="showFilters || hasFilters ? 'bg-accent-soft text-accent' : 'text-muted hover:bg-surface-hover hover:text-text'"
+        :aria-expanded="showFilters"
+        @click="showFilters = !showFilters"
+      >
+        <FunnelIcon class="h-4 w-4" aria-hidden="true" />
+        Filtres<span v-if="activeFilterCount" class="rounded-full bg-accent px-1.5 text-xs text-accent-text">{{ activeFilterCount }}</span>
+      </button>
+
+      <div class="h-6 w-px bg-line" aria-hidden="true" />
+
+      <div class="flex min-w-0 flex-1 overflow-x-auto" aria-label="Trier les vins">
+        <button
+          v-for="option in SORTS"
+          :key="option.key"
+          type="button"
+          class="inline-flex shrink-0 items-center gap-1 rounded-lg px-2 text-xs font-medium transition-colors sm:text-sm"
+          :class="prefs.listSort === option.key ? 'text-accent' : 'text-muted hover:bg-surface-hover hover:text-text'"
+          :aria-label="prefs.listSort === option.key ? `Trier par ${option.label}, ordre ${prefs.listSortDirection === 'asc' ? 'croissant' : 'décroissant'}` : `Trier par ${option.label}`"
+          :aria-pressed="prefs.listSort === option.key"
+          @click="prefs.selectSort(option.key)"
+        >
+          {{ option.label }}
+          <ArrowUpIcon v-if="prefs.listSort === option.key && prefs.listSortDirection === 'asc'" class="h-3.5 w-3.5" aria-hidden="true" />
+          <ArrowDownIcon v-else-if="prefs.listSort === option.key" class="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      </div>
+
+      <div class="flex rounded-xl bg-surface-2 p-0.5" role="group" aria-label="Mode d'affichage">
+        <button
+          type="button"
+          class="flex h-11 w-11 items-center justify-center rounded-lg transition-colors"
+          :class="prefs.viewMode === 'list' ? 'bg-surface text-accent shadow-card' : 'text-muted hover:text-text'"
+          :aria-pressed="prefs.viewMode === 'list'"
+          aria-label="Afficher la liste"
+          @click="prefs.viewMode = 'list'"
+        >
+          <ListBulletIcon class="h-5 w-5" aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          class="flex h-11 w-11 items-center justify-center rounded-lg transition-colors"
+          :class="prefs.viewMode === 'rack' ? 'bg-surface text-accent shadow-card' : 'text-muted hover:text-text'"
+          :aria-pressed="prefs.viewMode === 'rack'"
+          aria-label="Afficher le plan du casier"
+          @click="prefs.viewMode = 'rack'"
+        >
+          <Squares2X2Icon class="h-5 w-5" aria-hidden="true" />
+        </button>
+      </div>
+    </div>
+
+    <p v-if="sqlError" role="alert" class="rounded-xl border border-danger bg-danger-soft px-4 py-3 text-sm text-danger">
+      {{ sqlError }}
     </p>
 
     <!-- Le sommelier réfléchit -->
@@ -288,7 +425,7 @@ const matchedSlotNumbers = computed(() =>
       role="status"
       aria-live="polite"
     >
-      <span class="text-xl" aria-hidden="true">✨</span>
+      <SparklesIcon class="h-6 w-6 text-accent" aria-hidden="true" />
       <span class="font-medium text-accent">Le sommelier réfléchit</span>
       <span class="flex gap-1" aria-hidden="true">
         <span class="thinking-dot h-2 w-2 rounded-full bg-accent" />
@@ -304,7 +441,7 @@ const matchedSlotNumbers = computed(() =>
     >
       <div class="flex items-center justify-between gap-2 bg-accent-soft px-4 py-2.5">
         <span class="flex items-center gap-2 font-semibold text-accent">
-          ✨ Réponse du sommelier
+          <SparklesIcon class="h-5 w-5" aria-hidden="true" /> Réponse du sommelier
         </span>
         <span class="text-sm text-muted">
           {{ aiResult.quotaRemaining }} sur {{ sommelier?.dailyQuota }} restantes
@@ -332,7 +469,9 @@ const matchedSlotNumbers = computed(() =>
         <p v-if="aiResult.recommendations.length === 0" class="text-muted">
           Le sommelier n'a trouvé aucun vin vraiment adapté dans ta cave.
         </p>
-        <p v-if="aiResult.note" class="text-sm italic text-muted">💡 {{ aiResult.note }}</p>
+        <p v-if="aiResult.note" class="flex gap-2 text-sm italic text-muted">
+          <LightBulbIcon class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" /> {{ aiResult.note }}
+        </p>
       </div>
     </div>
 
@@ -341,129 +480,127 @@ const matchedSlotNumbers = computed(() =>
       v-else-if="aiError"
       class="rounded-xl border border-warning bg-warning-soft px-4 py-3 text-sm"
     >
-      <p class="font-medium text-warning">✨ Le sommelier n'a pas pu répondre</p>
+      <p class="flex items-center gap-2 font-medium text-warning">
+        <SparklesIcon class="h-5 w-5" aria-hidden="true" /> Le sommelier n'a pas pu répondre
+      </p>
       <p class="mt-0.5 text-muted">{{ aiError }}</p>
       <p class="mt-1 text-muted">Les résultats de la recherche classique restent affichés.</p>
     </div>
 
-    <!-- Bandeau de résultats SQL — toujours présent -->
+    <!--
+      Le bandeau de résultats est LA réponse du produit : « 3 vins trouvés · emplacements
+      12, 34, 51 », les numéros en grosses puces qui emmènent le plan sur l'alvéole.
+      Auparavant la liste des emplacements était une mention grise en fin de phrase, et
+      elle mélangeait sans le dire les numéros de plusieurs casiers.
+    -->
     <div
       v-if="cellar.searchActive"
-      class="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-surface-2 px-4 py-3"
+      class="space-y-3 rounded-xl border border-line bg-surface-2 px-4 py-3"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
     >
-      <p class="text-sm text-text">
-        <span aria-hidden="true">{{ lastMode === 'ai' ? '📋' : '🔍' }}</span>
-        <strong>{{ cellar.searchResult?.total ?? 0 }}</strong>
-        vin(s) pour « {{ cellar.searchLabel }} »
-        <span v-if="matchedSlotNumbers" class="text-muted">
-          → emplacements {{ matchedSlotNumbers }}
-        </span>
-      </p>
+      <p class="sr-only">{{ announcement }}</p>
 
-      <div class="flex items-center gap-3">
-        <button
-          v-if="lastMode === 'ai'"
-          type="button"
-          class="text-sm text-muted underline decoration-dotted hover:text-text"
-          @click="retryWithoutAi"
-        >
-          Chercher sans l'IA
-        </button>
-        <button
-          type="button"
-          class="text-sm font-medium text-accent hover:underline"
-          @click="reset"
-        >
-          Effacer
-        </button>
+      <div class="flex flex-wrap items-baseline justify-between gap-2">
+        <p class="flex flex-wrap items-center gap-1.5 text-text">
+          <SparklesIcon v-if="lastMode === 'ai'" class="h-5 w-5 text-accent" aria-hidden="true" />
+          <MagnifyingGlassIcon v-else class="h-5 w-5 text-accent" aria-hidden="true" />
+          <strong class="font-display text-lg">{{ total }}</strong>
+          {{ total > 1 ? 'vins trouvés' : 'vin trouvé' }}
+          <span class="text-muted">pour « {{ cellar.searchLabel }} »</span>
+        </p>
+
+        <div class="flex items-center gap-3">
+          <button
+            v-if="lastMode === 'ai'"
+            type="button"
+            class="min-h-11 text-sm text-muted underline decoration-dotted hover:text-text"
+            @click="retryWithoutAi"
+          >
+            Chercher sans l'IA
+          </button>
+          <button
+            type="button"
+            class="inline-flex min-h-11 items-center gap-1 text-sm font-medium text-accent hover:underline"
+            @click="reset"
+          >
+            <XMarkIcon class="h-4 w-4" aria-hidden="true" /> Effacer
+          </button>
+        </div>
       </div>
+
+      <div v-for="group in cellar.matchedByRack" :key="group.rack.id" class="space-y-1.5">
+        <p class="text-sm text-muted">
+          {{ cellar.racks.length > 1 ? `Casier ${group.rack.name}` : 'Emplacements' }}
+        </p>
+        <div class="flex flex-wrap gap-2">
+          <button
+            v-for="number in group.numbers"
+            :key="number"
+            type="button"
+            class="min-h-11 min-w-11 rounded-xl border border-accent bg-accent-soft px-4 text-lg font-bold tabular-nums text-accent transition-colors hover:bg-accent hover:text-accent-text"
+            :aria-label="`Aller à l'emplacement ${number} sur le plan du casier`"
+            @click="goToSlot(group.rack.id, number)"
+          >
+            {{ number }}
+          </button>
+        </div>
+      </div>
+
+      <p v-if="total === 0" class="text-sm text-muted">
+        Aucun vin ne correspond. Essaie un mot plus simple : « poisson », « bordeaux »…
+      </p>
     </div>
 
-    <!-- Facettes -->
-    <div v-if="showFilters" class="space-y-5 rounded-xl border border-line bg-surface p-4">
-      <fieldset>
-        <legend class="mb-2 text-sm font-semibold text-muted">Couleur</legend>
-        <div class="flex flex-wrap gap-2">
-          <button
-            v-for="color in WINE_COLORS"
-            :key="color"
-            type="button"
-            class="rounded-full border px-4 py-2 text-sm transition-colors"
-            :class="
-              selectedColors.includes(color)
-                ? 'border-accent bg-accent-soft font-medium text-accent'
-                : 'border-line text-muted hover:bg-surface-hover'
-            "
-            :aria-pressed="selectedColors.includes(color)"
-            @click="toggle(selectedColors, color)"
-          >
-            {{ WINE_COLOR_LABELS[color] }}
-          </button>
-        </div>
-      </fieldset>
-
-      <fieldset>
-        <legend class="mb-2 text-sm font-semibold text-muted">Accord mets-vins</legend>
-        <div class="flex flex-wrap gap-2">
-          <button
-            v-for="tag in FOOD_TAGS"
-            :key="tag.slug"
-            type="button"
-            class="rounded-full border px-4 py-2 text-sm transition-colors"
-            :class="
-              selectedFoods.includes(tag.slug)
-                ? 'border-accent bg-accent-soft font-medium text-accent'
-                : 'border-line text-muted hover:bg-surface-hover'
-            "
-            :aria-pressed="selectedFoods.includes(tag.slug)"
-            @click="toggle(selectedFoods, tag.slug)"
-          >
-            {{ tag.emoji }} {{ tag.labelFr }}
-          </button>
-        </div>
-      </fieldset>
-
-      <fieldset>
-        <legend class="mb-2 text-sm font-semibold text-muted">Profil marqué</legend>
-        <div class="flex flex-wrap gap-2">
-          <button
-            v-for="axis in structureAxes"
-            :key="axis"
-            type="button"
-            class="rounded-full border px-4 py-2 text-sm transition-colors"
-            :class="
-              structureBounds[axis]
-                ? 'border-accent bg-accent-soft font-medium text-accent'
-                : 'border-line text-muted hover:bg-surface-hover'
-            "
-            :aria-pressed="Boolean(structureBounds[axis])"
-            @click="toggleStructure(axis)"
-          >
-            {{ STRUCTURE_LABELS[axis] }}
-          </button>
-        </div>
-      </fieldset>
-
-      <fieldset>
-        <legend class="mb-2 text-sm font-semibold text-muted">Note Vivino minimale</legend>
-        <div class="flex flex-wrap gap-2">
-          <button
-            v-for="value in [3, 3.5, 4, 4.5]"
-            :key="value"
-            type="button"
-            class="rounded-full border px-4 py-2 text-sm transition-colors"
-            :class="
-              minRating === value
-                ? 'border-accent bg-accent-soft font-medium text-accent'
-                : 'border-line text-muted hover:bg-surface-hover'
-            "
-            :aria-pressed="minRating === value"
-            @click="minRating = minRating === value ? null : value"
-          >
-            ★ {{ value }}+
-          </button>
-        </div>
-      </fieldset>
+    <!-- Facettes : panneau en ligne à la souris, feuille au doigt. -->
+    <div id="search-filters" v-if="hoverPointer && showFilters" class="rounded-xl border border-line bg-surface p-4 shadow-card">
+      <SearchFilters
+        :colors="selectedColors"
+        :foods="selectedFoods"
+        :min-rating="minRating"
+        :structure="structureBounds"
+        @update:colors="updateColors"
+        @update:foods="updateFoods"
+        @update:min-rating="updateMinRating"
+        @update:structure="updateStructure"
+      />
     </div>
+
+    <BottomSheet
+      v-if="!hoverPointer"
+      :open="showFilters"
+      title="Filtres"
+      @close="showFilters = false"
+    >
+      <SearchFilters
+        :colors="selectedColors"
+        :foods="selectedFoods"
+        :min-rating="minRating"
+        :structure="structureBounds"
+        @update:colors="updateColors"
+        @update:foods="updateFoods"
+        @update:min-rating="updateMinRating"
+        @update:structure="updateStructure"
+      />
+      <template #actions>
+        <div class="flex gap-3">
+          <button
+            type="button"
+            class="min-h-11 rounded-xl border border-line px-5 font-medium text-muted transition-colors hover:bg-surface-hover"
+            @click="clearFilters(true)"
+          >
+            Tout effacer
+          </button>
+          <button
+            type="button"
+            class="min-h-11 flex-1 rounded-xl bg-accent font-semibold text-accent-text transition-colors hover:bg-accent-hover"
+            @click="applyFilters"
+          >
+            Voir les résultats
+          </button>
+        </div>
+      </template>
+    </BottomSheet>
   </section>
 </template>

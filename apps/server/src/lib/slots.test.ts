@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildDedupeKey, normalizeForDedupe } from './dedupe.js'
-import { formatSlotNumber, generateSlots } from './slots.js'
+import { formatSlotNumber, generateSlots, reconcileSlots, shouldPadSlots } from './slots.js'
 
 describe('generateSlots', () => {
   it('génère un emplacement par case', () => {
@@ -55,6 +55,72 @@ describe('formatSlotNumber', () => {
     expect(formatSlotNumber(0)).toBe('00')
     expect(formatSlotNumber(12)).toBe('12')
     expect(formatSlotNumber(105)).toBe('105')
+  })
+
+  it('renonce au complément quand le casier mélange les longueurs', () => {
+    // « 05 » à côté de « 100 » inventerait une numérotation qui n'est pas sur le meuble.
+    expect(formatSlotNumber(5, false)).toBe('5')
+  })
+})
+
+describe('shouldPadSlots', () => {
+  it('complète un casier ordinaire', () => {
+    expect(shouldPadSlots([1, 9, 60])).toBe(true)
+  })
+
+  it('renonce dès qu’un emplacement dépasse deux chiffres', () => {
+    expect(shouldPadSlots([1, 2, 3, 100, 5, 6])).toBe(false)
+  })
+
+  it('accepte un casier vide', () => {
+    expect(shouldPadSlots([])).toBe(true)
+  })
+})
+
+describe('reconcileSlots', () => {
+  /** Casier 2×3 numéroté par défaut, dont l'emplacement (0,1) a été renuméroté 100. */
+  function customRack() {
+    return generateSlots(2, 3, 'ROW_MAJOR', 1).map((s, i) => ({
+      ...s,
+      id: `slot-${i}`,
+      number: s.row === 0 && s.col === 1 ? 100 : s.number,
+    }))
+  }
+
+  it('préserve un numéro personnalisé quand on agrandit le casier', () => {
+    const { toCreate, toDelete } = reconcileSlots(customRack(), 2, 4, 'ROW_MAJOR', 1)
+
+    // Aucune case existante ne disparaît, et le 100 n'est jamais recréé ni écrasé.
+    expect(toDelete).toEqual([])
+    expect(toCreate.map((s) => `${s.row}:${s.col}`).sort()).toEqual(['0:3', '1:3'])
+    expect(toCreate.some((s) => s.number === 100)).toBe(false)
+  })
+
+  it('ne supprime que les positions sorties de la grille', () => {
+    const { toCreate, toDelete } = reconcileSlots(customRack(), 2, 2, 'ROW_MAJOR', 1)
+
+    expect(toCreate).toEqual([])
+    expect(toDelete.map((s) => `${s.row}:${s.col}`).sort()).toEqual(['0:2', '1:2'])
+  })
+
+  it('n’attribue jamais un numéro déjà porté par une case conservée', () => {
+    // La suite générée pour un 2×4 contient 5, or 5 est déjà pris par la case (1,1)
+    // du casier d'origine — la nouvelle case doit recevoir autre chose.
+    const existing = customRack()
+    const { toCreate } = reconcileSlots(existing, 2, 4, 'ROW_MAJOR', 1)
+
+    const kept = existing
+      .filter((s) => s.row < 2 && s.col < 4)
+      .map((s) => s.number)
+    const created = toCreate.map((s) => s.number)
+
+    expect(new Set([...kept, ...created]).size).toBe(kept.length + created.length)
+  })
+
+  it('laisse un casier intact quand rien ne change', () => {
+    const { toCreate, toDelete } = reconcileSlots(customRack(), 2, 3, 'ROW_MAJOR', 1)
+    expect(toCreate).toEqual([])
+    expect(toDelete).toEqual([])
   })
 })
 

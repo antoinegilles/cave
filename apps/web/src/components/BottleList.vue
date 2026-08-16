@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { WINE_COLOR_LABELS, type WineColor } from '@cave/shared'
-import { computed, ref } from 'vue'
+import { PhotoIcon } from '@heroicons/vue/24/outline'
+import { computed } from 'vue'
+import { compareBottles } from '../lib/bottleSort'
 import type { BottleView } from '../lib/types'
+import { usePrefsStore } from '../stores/prefs'
 
 /**
  * Vue liste de la cave — l'affichage par défaut.
@@ -17,20 +20,11 @@ const props = defineProps<{
   /** Emplacements retenus par la recherche, mis en avant dans la liste. */
   highlightedIds?: Set<string>
   emptyMessage?: string
-  /** Masque le sélecteur de tri (historique, où l'ordre chronologique fait foi). */
-  hideSort?: boolean
 }>()
 
-type SortKey = 'slot' | 'name' | 'rating' | 'vintage'
-
-const SORTS: { key: SortKey; label: string }[] = [
-  { key: 'slot', label: 'Emplacement' },
-  { key: 'name', label: 'Nom' },
-  { key: 'rating', label: 'Note' },
-  { key: 'vintage', label: 'Millésime' },
-]
-
-const sortKey = ref<SortKey>('slot')
+// Le tri est un réglage, pas un état de navigation : il se réinitialisait à chaque
+// retour depuis une fiche.
+const prefs = usePrefsStore()
 
 const WINE_DOT: Record<string, string> = {
   RED: 'bg-wine-red',
@@ -41,20 +35,11 @@ const WINE_DOT: Record<string, string> = {
   DESSERT: 'bg-wine-dessert',
 }
 
-/** Comparateurs par critère. Les valeurs absentes sont rejetées en fin de liste. */
-const COMPARATORS: Record<SortKey, (a: BottleView, b: BottleView) => number> = {
-  slot: (a, b) => (a.slotNumber ?? Infinity) - (b.slotNumber ?? Infinity),
-  name: (a, b) => a.wine.name.localeCompare(b.wine.name, 'fr'),
-  rating: (a, b) => (b.wine.vivinoRating ?? -1) - (a.wine.vivinoRating ?? -1),
-  vintage: (a, b) => (b.wine.vintage ?? -1) - (a.wine.vintage ?? -1),
-}
-
 /**
  * Tri courant, avec les résultats de recherche toujours remontés en tête : quand des
  * emplacements sont allumés, ce sont eux qu'on veut lire en premier.
  */
 const ordered = computed(() => {
-  const compare = COMPARATORS[sortKey.value]
   const highlighted = props.highlightedIds
 
   return [...props.bottles].sort((a, b) => {
@@ -62,7 +47,7 @@ const ordered = computed(() => {
       const rank = (highlighted.has(a.id) ? 0 : 1) - (highlighted.has(b.id) ? 0 : 1)
       if (rank !== 0) return rank
     }
-    return compare(a, b)
+    return compareBottles(a, b, prefs.listSort, prefs.listSortDirection)
   })
 })
 
@@ -82,32 +67,11 @@ function subtitle(bottle: BottleView): string {
       {{ emptyMessage ?? 'Aucune bouteille.' }}
     </p>
 
-    <div v-else-if="!hideSort" class="mb-3 flex flex-wrap items-center gap-2">
-      <span class="text-sm text-muted">Trier par</span>
-      <div class="inline-flex flex-wrap gap-1 rounded-xl border border-line bg-surface p-1">
-        <button
-          v-for="option in SORTS"
-          :key="option.key"
-          type="button"
-          class="rounded-lg px-3 py-1.5 text-sm font-medium transition-colors"
-          :class="
-            sortKey === option.key
-              ? 'bg-accent text-accent-text'
-              : 'text-muted hover:bg-surface-hover hover:text-text'
-          "
-          :aria-pressed="sortKey === option.key"
-          @click="sortKey = option.key"
-        >
-          {{ option.label }}
-        </button>
-      </div>
-    </div>
-
     <ul v-if="ordered.length > 0" class="space-y-3">
       <li v-for="bottle in ordered" :key="bottle.id">
         <RouterLink
           :to="{ name: 'bottle', params: { id: bottle.id } }"
-          class="flex items-center gap-4 rounded-2xl border bg-surface p-3 shadow-card transition-colors hover:bg-surface-hover sm:p-4"
+          class="flex items-center gap-3 rounded-2xl border bg-surface p-3 shadow-card transition-colors hover:bg-surface-hover sm:gap-4 sm:p-4"
           :class="
             highlightedIds?.has(bottle.id)
               ? 'border-accent ring-2 ring-accent/30'
@@ -116,7 +80,7 @@ function subtitle(bottle: BottleView): string {
         >
           <!-- Visuel de la bouteille, ou pastille de couleur à défaut -->
           <div
-            class="flex h-20 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-surface-2"
+            class="flex h-16 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-surface-2 sm:h-20 sm:w-16"
           >
             <img
               v-if="bottle.wine.imageUrl"
@@ -125,7 +89,7 @@ function subtitle(bottle: BottleView): string {
               loading="lazy"
               class="h-full w-full object-contain"
             />
-            <span v-else class="text-3xl" aria-hidden="true">🍷</span>
+            <PhotoIcon v-else class="h-7 w-7 text-faint" aria-hidden="true" />
           </div>
 
           <div class="min-w-0 flex-1">
@@ -136,7 +100,9 @@ function subtitle(bottle: BottleView): string {
                 :class="WINE_DOT[bottle.wine.color] ?? 'bg-faint'"
                 :title="WINE_COLOR_LABELS[bottle.wine.color as WineColor]"
               />
-              <p class="truncate font-semibold text-text">{{ bottle.wine.name }}</p>
+              <!-- Deux lignes plutôt qu'une troncature : « Château Haut-Bri… » n'aide
+                   personne à reconnaître sa bouteille. -->
+              <p class="line-clamp-2 font-semibold text-text">{{ bottle.wine.name }}</p>
             </div>
 
             <p class="truncate text-sm text-muted">{{ subtitle(bottle) }}</p>
@@ -163,18 +129,19 @@ function subtitle(bottle: BottleView): string {
             </div>
           </div>
 
-          <!-- Le numéro d'emplacement : le lien avec la cave physique -->
+          <!-- Le numéro d'emplacement : le lien avec la cave physique. Il reste à droite,
+               c'est l'ancre que l'œil descend chercher le long de la liste. -->
           <div
-            class="flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-xl border text-center"
+            class="flex h-12 min-w-12 shrink-0 flex-col items-center justify-center rounded-xl border px-1.5 text-center sm:h-14 sm:min-w-14"
             :class="
               highlightedIds?.has(bottle.id)
                 ? 'border-accent bg-accent text-accent-text'
                 : 'border-line bg-surface-2 text-brass'
             "
           >
-            <span class="text-[0.65rem] uppercase leading-none opacity-70">n°</span>
+            <span class="hidden text-[0.65rem] uppercase leading-none opacity-70 sm:block">n°</span>
             <span class="text-xl font-bold leading-tight tabular-nums">
-              {{ bottle.slotNumber ?? '–' }}
+              <span class="sr-only">emplacement n° </span>{{ bottle.slotNumber ?? '–' }}
             </span>
           </div>
         </RouterLink>

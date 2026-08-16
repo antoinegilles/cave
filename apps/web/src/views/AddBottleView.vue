@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { WINE_COLORS, WINE_COLOR_LABELS } from '@cave/shared'
+import { CameraIcon, MagnifyingGlassIcon, TagIcon } from '@heroicons/vue/24/outline'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import BottomSheet from '../components/BottomSheet.vue'
 import { ApiError, api } from '../lib/api'
 import { prepareImage } from '../lib/image'
 import type { CandidateView, ResolveResult, WineView } from '../lib/types'
@@ -68,6 +70,30 @@ const freeSlots = computed(() => {
   if (!rack) return []
   return rack.slots.filter((s) => !s.bottle || s.number === slotNumber.value)
 })
+
+/**
+ * Nombre de pastilles montrées d'emblée.
+ *
+ * Les emplacements libres tenaient dans un `max-h-40 overflow-y-auto` : un conteneur
+ * défilant de 170 px, imbriqué dans une page qui défile déjà — un piège classique, et
+ * intenable depuis que les casiers ne sont plus bornés à 30 × 30. Les plus proches du
+ * numéro saisi suffisent ; le reste passe par une feuille, seul conteneur défilant.
+ */
+const VISIBLE_FREE_SLOTS = 18
+const slotSheetOpen = ref(false)
+
+const visibleFreeSlots = computed(() => {
+  const reference = slotNumber.value ?? freeSlots.value[0]?.number ?? 0
+  return [...freeSlots.value]
+    .sort((a, b) => Math.abs(a.number - reference) - Math.abs(b.number - reference))
+    .slice(0, VISIBLE_FREE_SLOTS)
+    .sort((a, b) => a.number - b.number)
+})
+
+function pickSlot(number: number): void {
+  slotNumber.value = number
+  slotSheetOpen.value = false
+}
 
 const slotTaken = computed(() => {
   const rack = activeRack.value
@@ -287,7 +313,7 @@ const inputClass =
           class="flex w-full items-center gap-4 rounded-2xl border-2 border-accent bg-accent-soft p-5 text-left transition-colors hover:bg-surface-hover"
           @click="fileInput?.click()"
         >
-          <span class="text-4xl" aria-hidden="true">📷</span>
+          <CameraIcon class="h-10 w-10 shrink-0 text-accent" aria-hidden="true" />
           <span>
             <span class="block text-lg font-semibold text-text">Photographier l'étiquette</span>
             <span class="block text-muted">
@@ -305,8 +331,8 @@ const inputClass =
         />
 
         <div class="rounded-2xl border border-line bg-surface p-4">
-          <label for="wine-query" class="mb-2 block font-semibold text-text">
-            🔎 Chercher par nom
+          <label for="wine-query" class="mb-2 flex items-center gap-2 font-semibold text-text">
+            <MagnifyingGlassIcon class="h-5 w-5 text-muted" aria-hidden="true" /> Chercher par nom
           </label>
           <div class="flex gap-2">
             <input
@@ -314,7 +340,7 @@ const inputClass =
               v-model="manualQuery"
               type="text"
               placeholder="Château Margaux 2015"
-              :class="inputClass"
+              :class="[inputClass, 'min-w-0']"
               @keydown.enter="searchByName"
             />
             <button
@@ -328,7 +354,9 @@ const inputClass =
         </div>
 
         <div class="rounded-2xl border border-line bg-surface p-4">
-          <label for="barcode" class="mb-2 block font-semibold text-text">🏷️ Code-barres</label>
+          <label for="barcode" class="mb-2 flex items-center gap-2 font-semibold text-text">
+            <TagIcon class="h-5 w-5 text-muted" aria-hidden="true" /> Code-barres
+          </label>
           <div class="flex gap-2">
             <input
               id="barcode"
@@ -336,7 +364,7 @@ const inputClass =
               type="text"
               inputmode="numeric"
               placeholder="3760040661234"
-              :class="inputClass"
+              :class="[inputClass, 'min-w-0']"
               @keydown.enter="lookupBarcode"
             />
             <button
@@ -387,12 +415,12 @@ const inputClass =
     <!-- Étape 2 : vérifier et ranger -->
     <template v-else-if="wine">
       <div class="space-y-4 rounded-2xl border border-line bg-surface p-4 sm:p-5">
-        <div class="flex gap-4">
+        <div class="flex flex-col gap-4 sm:flex-row">
           <img
             v-if="previewUrl || wine.imageUrl"
             :src="previewUrl ?? wine.imageUrl ?? ''"
             alt=""
-            class="h-28 w-24 shrink-0 rounded-xl object-contain"
+            class="mx-auto h-28 w-24 shrink-0 rounded-xl object-contain sm:mx-0"
           />
           <div class="min-w-0 flex-1 space-y-3">
             <div>
@@ -442,7 +470,7 @@ const inputClass =
               min="1800"
               max="2100"
               placeholder="Laisse vide si non millésimé"
-              :class="inputClass"
+              :class="[inputClass, 'min-w-0']"
             />
             <p v-if="fieldErrors['wine.vintage']" class="mt-1.5 text-sm text-danger">
               {{ fieldErrors['wine.vintage'] }}
@@ -480,7 +508,7 @@ const inputClass =
               min="0"
               step="0.5"
               placeholder="Facultatif"
-              :class="inputClass"
+              :class="[inputClass, 'min-w-0']"
             />
             <p v-if="fieldErrors['purchasePrice']" class="mt-1.5 text-sm text-danger">
               {{ fieldErrors['purchasePrice'] }}
@@ -558,12 +586,12 @@ const inputClass =
           </p>
         </div>
 
-        <div class="flex max-h-40 flex-wrap gap-2 overflow-y-auto">
+        <div class="flex flex-wrap gap-2">
           <button
-            v-for="slot in freeSlots"
+            v-for="slot in visibleFreeSlots"
             :key="slot.id"
             type="button"
-            class="h-11 w-12 rounded-lg border font-medium transition-colors"
+            class="h-11 min-w-12 rounded-lg border px-2 font-medium tabular-nums transition-colors"
             :class="
               slotNumber === slot.number
                 ? 'border-accent bg-accent text-accent-text'
@@ -574,6 +602,41 @@ const inputClass =
             {{ slot.number }}
           </button>
         </div>
+
+        <button
+          v-if="freeSlots.length > VISIBLE_FREE_SLOTS"
+          type="button"
+          class="min-h-11 w-full rounded-xl border border-line text-muted transition-colors hover:bg-surface-hover"
+          @click="slotSheetOpen = true"
+        >
+          Voir les {{ freeSlots.length }} emplacements libres
+        </button>
+
+        <BottomSheet
+          :open="slotSheetOpen"
+          title="Choisir un emplacement"
+          @close="slotSheetOpen = false"
+        >
+          <p class="mb-3 text-sm text-faint">
+            {{ freeSlots.length }} emplacements libres dans « {{ activeRack?.name }} »
+          </p>
+          <div class="grid grid-cols-5 gap-2">
+            <button
+              v-for="slot in freeSlots"
+              :key="slot.id"
+              type="button"
+              class="h-11 rounded-lg border px-1 font-medium tabular-nums transition-colors"
+              :class="
+                slotNumber === slot.number
+                  ? 'border-accent bg-accent text-accent-text'
+                  : 'border-line text-muted hover:border-accent'
+              "
+              @click="pickSlot(slot.number)"
+            >
+              {{ slot.number }}
+            </button>
+          </div>
+        </BottomSheet>
       </div>
 
       <div class="flex gap-3">

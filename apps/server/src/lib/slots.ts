@@ -41,7 +41,91 @@ export function generateSlots(
   return slots
 }
 
-/** Affichage sur 2 chiffres minimum : le casier physique est étiqueté « 03 », pas « 3 ». */
-export function formatSlotNumber(n: number): string {
-  return n < 10 ? `0${n}` : String(n)
+/**
+ * Affichage sur 2 chiffres minimum : le casier physique est étiqueté « 03 », pas « 3 ».
+ *
+ * Le complément ne vaut que si tout le casier tient sur deux chiffres. Dès qu'un
+ * emplacement a été renuméroté au-delà (une cave 1, 2, 3, 100, 5, 6 est un cas réel),
+ * afficher « 05 » à côté de « 100 » invente une numérotation qui n'existe pas sur le
+ * meuble : on rend alors les numéros tels qu'ils sont écrits. Voir `shouldPadSlots`.
+ */
+export function formatSlotNumber(n: number, pad = true): string {
+  return pad && n < 10 ? `0${n}` : String(n)
+}
+
+/** Vrai si tous les numéros du casier tiennent sur deux chiffres. */
+export function shouldPadSlots(numbers: number[]): boolean {
+  return numbers.every((n) => n < 100)
+}
+
+export interface ExistingSlot extends SlotPosition {
+  id: string
+}
+
+export interface SlotReconciliation {
+  /** Positions apparues avec le nouveau format, à créer. */
+  toCreate: SlotPosition[]
+  /** Emplacements hors de la nouvelle grille, à supprimer. */
+  toDelete: ExistingSlot[]
+}
+
+/**
+ * Réconcilie les emplacements d'un casier après un redimensionnement.
+ *
+ * On raisonne en **positions** `(row, col)`, jamais en numéros : un emplacement *est* une
+ * case physique du meuble, son numéro n'en est que l'étiquette. Réconcilier par numéro —
+ * ce que faisait la route auparavant — supprimait tout emplacement renuméroté hors de la
+ * suite générée, donc effaçait silencieusement la numérotation personnalisée au premier
+ * changement de taille.
+ *
+ * Conséquence voulue : les cases qui survivent **gardent leur numéro**. Seules les cases
+ * nouvellement créées en reçoivent un, pris dans la suite générée puis, si celui-ci est
+ * déjà utilisé, au premier numéro libre au-dessus du maximum existant.
+ *
+ * Renuméroter tout le casier reste possible, mais c'est un geste explicite : changer
+ * `numbering` ou `startNumber` (voir la route, qui régénère alors entièrement).
+ */
+export function reconcileSlots(
+  existing: ExistingSlot[],
+  rows: number,
+  cols: number,
+  numbering: RackNumbering,
+  startNumber: number,
+): SlotReconciliation {
+  const target = generateSlots(rows, cols, numbering, startNumber)
+  const positionKey = (p: { row: number; col: number }) => `${p.row}:${p.col}`
+
+  const byPosition = new Map(existing.map((slot) => [positionKey(slot), slot]))
+
+  // Les numéros des cases conservées sont intouchables : on les recense avant d'attribuer
+  // quoi que ce soit aux nouvelles.
+  const taken = new Set<number>()
+  let highest = startNumber - 1
+  for (const position of target) {
+    const kept = byPosition.get(positionKey(position))
+    if (!kept) continue
+    taken.add(kept.number)
+    if (kept.number > highest) highest = kept.number
+  }
+
+  let nextFree = highest + 1
+  const toCreate: SlotPosition[] = []
+
+  for (const position of target) {
+    if (byPosition.has(positionKey(position))) continue
+    // Le numéro généré est le premier choix ; s'il est déjà porté par une case conservée,
+    // on prend le premier numéro libre au-dessus de tous les autres.
+    let number = position.number
+    if (taken.has(number)) {
+      while (taken.has(nextFree)) nextFree++
+      number = nextFree++
+    }
+    taken.add(number)
+    toCreate.push({ ...position, number })
+  }
+
+  const targetPositions = new Set(target.map(positionKey))
+  const toDelete = existing.filter((slot) => !targetPositions.has(positionKey(slot)))
+
+  return { toCreate, toDelete }
 }

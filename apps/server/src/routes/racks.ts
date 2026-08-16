@@ -1,7 +1,12 @@
-import { createRackSchema, updateRackSchema } from '@cave/shared'
+import {
+  MAX_RACK_SLOTS,
+  createRackSchema,
+  updateRackSchema,
+  updateSlotNumberSchema,
+} from '@cave/shared'
 import type { FastifyInstance } from 'fastify'
 import { prisma } from '../lib/prisma.js'
-import { generateSlots } from '../lib/slots.js'
+import { generateSlots, reconcileSlots } from '../lib/slots.js'
 import { serializeBottle } from '../services/serialize.js'
 
 export default async function rackRoutes(app: FastifyInstance) {
@@ -89,25 +94,45 @@ export default async function rackRoutes(app: FastifyInstance) {
       startNumber: parsed.data.startNumber ?? rack.startNumber,
     }
 
-    const layoutChanged =
-      next.rows !== rack.rows ||
-      next.cols !== rack.cols ||
-      next.numbering !== rack.numbering ||
-      next.startNumber !== rack.startNumber
+    if (next.rows * next.cols > MAX_RACK_SLOTS) {
+      return reply.code(400).send({
+        error: `Un casier ne peut pas dépasser ${MAX_RACK_SLOTS.toLocaleString('fr-FR')} emplacements.`,
+      })
+    }
 
-    if (!layoutChanged) {
+    const resized = next.rows !== rack.rows || next.cols !== rack.cols
+    // Toucher à la numérotation est un geste explicite de renumérotation complète : c'est
+    // le seul cas où l'on accepte d'écraser les numéros personnalisés.
+    const renumbered =
+      next.numbering !== rack.numbering || next.startNumber !== rack.startNumber
+
+    if (!resized && !renumbered) {
       await prisma.rack.update({ where: { id }, data: { name: parsed.data.name ?? rack.name } })
       return { ok: true, relocated: 0 }
     }
 
+    const existing = await prisma.slot.findMany({
+      where: { rackId: id },
+      select: { id: true, number: true, row: true, col: true },
+    })
+
     // Redimensionner ne doit jamais faire disparaître silencieusement une bouteille rangée
     // dans un emplacement qui n'existe plus. On refuse tant que ces bouteilles n'ont pas
-    // été déplacées, plutôt que de les détacher sans prévenir.
-    const target = generateSlots(next.rows, next.cols, next.numbering, next.startNumber)
-    const targetNumbers = new Set(target.map((s) => s.number))
+    // été déplacées, plutôt que de les détacher sans prévenir. Le test porte sur les
+    // **positions** : c'est la case physique qui disparaît, pas son étiquette.
+    const { toCreate, toDelete } = reconcileSlots(
+      existing,
+      next.rows,
+      next.cols,
+      next.numbering,
+      next.startNumber,
+    )
 
     const orphaned = await prisma.bottle.findMany({
-      where: { status: 'IN_CELLAR', slot: { rackId: id, number: { notIn: [...targetNumbers] } } },
+      where: {
+        status: 'IN_CELLAR',
+        slotId: { in: toDelete.map((s) => s.id) },
+      },
       include: { slot: true, wine: { select: { name: true } } },
     })
 
@@ -127,24 +152,74 @@ export default async function rackRoutes(app: FastifyInstance) {
         where: { id },
         data: { name: parsed.data.name ?? rack.name, ...next },
       })
-      // Les slots vides hors nouvelle grille sont supprimés, les manquants créés.
-      await tx.slot.deleteMany({ where: { rackId: id, number: { notIn: [...targetNumbers] } } })
-      const existing = await tx.slot.findMany({ where: { rackId: id }, select: { number: true } })
-      const existingNumbers = new Set(existing.map((s) => s.number))
-      const toCreate = target.filter((s) => !existingNumbers.has(s.number))
+      if (toDelete.length > 0) {
+        await tx.slot.deleteMany({ where: { id: { in: toDelete.map((s) => s.id) } } })
+      }
+
+      if (renumbered) {
+        // Renumérotation demandée : la suite générée reprend la main sur tout le casier.
+        // On passe par des numéros négatifs temporaires car `@@unique([rackId, number])`
+        // rejetterait les collisions transitoires d'une réattribution en place.
+        const kept = await tx.slot.findMany({
+          where: { rackId: id },
+          select: { id: true, row: true, col: true },
+        })
+        for (const [index, slot] of kept.entries()) {
+          await tx.slot.update({ where: { id: slot.id }, data: { number: -1 - index } })
+        }
+        const generated = new Map(
+          generateSlots(next.rows, next.cols, next.numbering, next.startNumber).map((s) => [
+            `${s.row}:${s.col}`,
+            s.number,
+          ]),
+        )
+        for (const slot of kept) {
+          const number = generated.get(`${slot.row}:${slot.col}`)
+          if (number !== undefined) {
+            await tx.slot.update({ where: { id: slot.id }, data: { number } })
+          }
+        }
+      }
+
       if (toCreate.length > 0) {
         await tx.slot.createMany({ data: toCreate.map((s) => ({ ...s, rackId: id })) })
-      }
-      // Les positions row/col peuvent avoir changé même à numéro constant.
-      for (const slot of target) {
-        await tx.slot.updateMany({
-          where: { rackId: id, number: slot.number },
-          data: { row: slot.row, col: slot.col },
-        })
       }
     })
 
     return { ok: true }
+  })
+
+  /**
+   * Renumérote un emplacement.
+   *
+   * Les caves réelles sont mal étiquetées : six alvéoles numérotées 1, 2, 3, 100, 5, 6 est
+   * un cas légitime. Le numéro est une étiquette libre, seule l'unicité dans le casier est
+   * imposée — par la contrainte `@@unique([rackId, number])`, qu'on laisse parler.
+   */
+  app.patch('/:rackId/slots/:slotId', { preHandler: app.requireAdmin }, async (req, reply) => {
+    const { rackId, slotId } = req.params as { rackId: string; slotId: string }
+    const parsed = updateSlotNumberSchema.safeParse(req.body)
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'Requête invalide', issues: parsed.error.issues })
+    }
+
+    const slot = await prisma.slot.findFirst({ where: { id: slotId, rackId } })
+    if (!slot) return reply.code(404).send({ error: 'Emplacement introuvable' })
+
+    try {
+      const updated = await prisma.slot.update({
+        where: { id: slotId },
+        data: { number: parsed.data.number },
+      })
+      return { slot: { id: updated.id, number: updated.number, row: updated.row, col: updated.col } }
+    } catch (error) {
+      if ((error as { code?: string }).code === 'P2002') {
+        return reply
+          .code(409)
+          .send({ error: `Le numéro ${parsed.data.number} est déjà utilisé dans ce casier.` })
+      }
+      throw error
+    }
   })
 
   app.delete('/:id', { preHandler: app.requireAdmin }, async (req, reply) => {

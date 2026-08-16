@@ -45,7 +45,7 @@ async function submit(): Promise<void> {
   <div class="flex min-h-[80dvh] items-center justify-center">
     <form class="w-full max-w-sm space-y-6" @submit.prevent="submit">
       <div class="text-center">
-        <p class="text-6xl" aria-hidden="true">🍷</p>
+        <p class="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-accent font-display text-3xl font-bold text-accent-text shadow-float" aria-hidden="true">C</p>
         <h1 class="mt-3 font-display text-3xl font-semibold text-text">Cave</h1>
         <p class="mt-1 text-muted">Ta cave, emplacement par emplacement.</p>
       </div>

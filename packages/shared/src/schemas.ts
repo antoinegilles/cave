@@ -88,16 +88,65 @@ export const changePasswordSchema = z.object({
 
 /* ----------------------------------------------------------------- racks */
 
-export const createRackSchema = z.object({
+/**
+ * Bornes d'un casier.
+ *
+ * Il n'y a volontairement pas de « taille standard » : les caves réelles vont de six
+ * alvéoles à un mur entier. La seule limite est celle qui protège la base et le rendu —
+ * au-delà, ni SQLite ni un téléphone ne suivent. `MAX_RACK_SLOTS` est la vraie contrainte,
+ * `MAX_RACK_SIDE` évite seulement les casiers dégénérés de 1 × 10 000.
+ */
+export const MAX_RACK_SIDE = 200
+export const MAX_RACK_SLOTS = 10_000
+export const MAX_SLOT_NUMBER = 999_999
+
+const rackShape = {
   name: z.string().min(1, 'Nom requis').max(60),
-  rows: requiredNumber('Indique le nombre de rangées (1 à 30).')((n) => n.int().min(1).max(30)),
-  cols: requiredNumber('Indique le nombre de colonnes (1 à 30).')((n) => n.int().min(1).max(30)),
+  rows: requiredNumber(`Indique le nombre de rangées (1 à ${MAX_RACK_SIDE}).`)((n) =>
+    n.int().min(1).max(MAX_RACK_SIDE),
+  ),
+  cols: requiredNumber(`Indique le nombre de colonnes (1 à ${MAX_RACK_SIDE}).`)((n) =>
+    n.int().min(1).max(MAX_RACK_SIDE),
+  ),
   numbering: rackNumberingSchema.default('ROW_MAJOR'),
-  startNumber: requiredNumber('Indique le premier numéro du casier.')((n) => n.int().min(0).max(9999)).default(1),
-})
+  startNumber: requiredNumber('Indique le premier numéro du casier.')((n) =>
+    n.int().min(0).max(MAX_SLOT_NUMBER),
+  ).default(1),
+}
+
+/** `rows × cols` ne doit jamais dépasser le plafond global, quelle que soit la forme. */
+function withSlotCap<T extends z.ZodTypeAny>(schema: T) {
+  return schema.refine(
+    (value) => {
+      const { rows, cols } = value as { rows?: number; cols?: number }
+      if (rows === undefined || cols === undefined) return true
+      return rows * cols <= MAX_RACK_SLOTS
+    },
+    {
+      message: `Un casier ne peut pas dépasser ${MAX_RACK_SLOTS.toLocaleString('fr-FR')} emplacements.`,
+      path: ['cols'],
+    },
+  )
+}
+
+export const createRackSchema = withSlotCap(z.object(rackShape))
 export type CreateRackInput = z.infer<typeof createRackSchema>
 
-export const updateRackSchema = createRackSchema.partial()
+export const updateRackSchema = withSlotCap(z.object(rackShape).partial())
+
+/**
+ * Renumérotation d'un emplacement.
+ *
+ * Les numéros n'ont pas à former une suite : un casier de six alvéoles peut très bien être
+ * étiqueté 1, 2, 3, 100, 5, 6 si c'est ce qui est écrit sur le meuble. Seule l'unicité au
+ * sein du casier est garantie, par la contrainte `@@unique([rackId, number])`.
+ */
+export const updateSlotNumberSchema = z.object({
+  number: requiredNumber('Indique un numéro d’emplacement.')((n) =>
+    n.int().min(0).max(MAX_SLOT_NUMBER),
+  ),
+})
+export type UpdateSlotNumberInput = z.infer<typeof updateSlotNumberSchema>
 
 /* ------------------------------------------------------------------ wine */
 

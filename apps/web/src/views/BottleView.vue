@@ -1,8 +1,12 @@
 <script setup lang="ts">
 import { STRUCTURE_LABELS, WINE_COLOR_LABELS, type StructureAxis } from '@cave/shared'
+import { ArrowLeftIcon, CheckCircleIcon, TrashIcon } from '@heroicons/vue/24/outline'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import ConfirmSheet from '../components/ConfirmSheet.vue'
+import MeterRow from '../components/MeterRow.vue'
 import { api } from '../lib/api'
+import { decimalFr } from '../lib/format'
 import type { BottleView as Bottle } from '../lib/types'
 import { useCellarStore } from '../stores/cellar'
 
@@ -72,30 +76,40 @@ async function drink(): Promise<void> {
   }
 }
 
+const confirmingRemove = ref(false)
+const removing = ref(false)
+
 async function remove(): Promise<void> {
   if (!bottle.value) return
-  if (!confirm('Supprimer définitivement cette bouteille et son historique ?')) return
-  await api.delete(`/api/bottles/${bottle.value.id}`)
-  await cellar.loadRacks()
-  router.push({ name: 'cellar' })
+  removing.value = true
+  try {
+    await api.delete(`/api/bottles/${bottle.value.id}`)
+    await cellar.loadRacks()
+    router.push({ name: 'cellar' })
+  } finally {
+    removing.value = false
+    confirmingRemove.value = false
+  }
 }
 </script>
 
 <template>
   <div class="mx-auto max-w-2xl space-y-4">
-    <button type="button" class="text-sm text-muted" @click="router.back()">← Retour</button>
+    <button type="button" class="inline-flex items-center gap-1.5 rounded-lg text-sm text-muted hover:text-text" @click="router.back()">
+      <ArrowLeftIcon class="h-4 w-4" aria-hidden="true" /> Retour
+    </button>
 
     <p v-if="loading" class="py-12 text-center text-muted">Chargement…</p>
     <p v-else-if="error" class="rounded-lg bg-danger-soft px-4 py-2.5 text-danger">{{ error }}</p>
 
     <template v-else-if="bottle">
       <div class="rounded-2xl border border-line bg-surface p-5">
-        <div class="flex gap-4">
+        <div class="flex flex-col gap-4 sm:flex-row">
           <img
             v-if="bottle.wine.imageUrl"
             :src="bottle.wine.imageUrl"
             alt=""
-            class="h-32 w-24 shrink-0 rounded-lg object-contain"
+            class="mx-auto h-32 w-24 shrink-0 rounded-lg object-contain sm:mx-0"
           />
           <div class="min-w-0 flex-1">
             <div class="flex items-start justify-between gap-3">
@@ -185,19 +199,14 @@ async function remove(): Promise<void> {
       >
         <div v-if="structureRows.length">
           <h2 class="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">Profil</h2>
-          <div class="space-y-2">
-            <div v-for="row in structureRows" :key="row.axis" class="flex items-center gap-3">
-              <span class="w-28 shrink-0 text-sm text-muted">{{ row.label }}</span>
-              <div class="h-2 flex-1 overflow-hidden rounded-full bg-surface-2">
-                <div
-                  class="h-full rounded-full bg-brass"
-                  :style="{ width: `${(row.value / 5) * 100}%` }"
-                />
-              </div>
-              <span class="w-8 shrink-0 text-right text-sm tabular-nums text-muted">
-                {{ row.value.toFixed(1) }}
-              </span>
-            </div>
+          <div class="space-y-3">
+            <MeterRow
+              v-for="row in structureRows"
+              :key="row.axis"
+              :label="row.label"
+              :value="decimalFr(row.value)"
+              :percent="(row.value / 5) * 100"
+            />
           </div>
         </div>
 
@@ -232,10 +241,10 @@ async function remove(): Promise<void> {
         <button
           v-if="!drinkOpen"
           type="button"
-          class="w-full rounded-xl bg-accent py-4 text-lg font-semibold text-accent-text shadow-card transition-colors hover:bg-accent-hover"
+          class="flex w-full items-center justify-center gap-2 rounded-xl bg-accent py-4 text-lg font-semibold text-accent-text shadow-card transition-colors hover:bg-accent-hover"
           @click="drinkOpen = true"
         >
-          🍷 J'ouvre cette bouteille
+          <CheckCircleIcon class="h-6 w-6" aria-hidden="true" /> J'ouvre cette bouteille
         </button>
 
         <div v-else class="space-y-4 rounded-2xl border-2 border-accent bg-surface p-5">
@@ -308,23 +317,22 @@ async function remove(): Promise<void> {
       <button
         type="button"
         class="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-danger bg-transparent py-3 font-medium text-danger transition-colors hover:bg-danger-soft"
-        @click="remove"
+        @click="confirmingRemove = true"
       >
-        <svg
-          class="h-5 w-5"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m2 0v14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V6" />
-          <path d="M10 11v6M14 11v6" />
-        </svg>
+        <TrashIcon class="h-5 w-5" aria-hidden="true" />
         Supprimer cette bouteille
       </button>
+
+      <ConfirmSheet
+        :open="confirmingRemove"
+        title="Supprimer cette bouteille ?"
+        message="La bouteille et son historique de dégustation seront définitivement effacés."
+        confirm-label="Supprimer"
+        danger
+        :busy="removing"
+        @confirm="remove"
+        @cancel="confirmingRemove = false"
+      />
     </template>
   </div>
 </template>

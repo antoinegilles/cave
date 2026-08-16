@@ -1,5 +1,6 @@
 import type { WineData } from '@cave/shared'
 import { FOOD_TAGS } from '@cave/shared'
+import type { Prisma } from '@prisma/client'
 import { buildDedupeKey } from '../lib/dedupe.js'
 import { prisma } from '../lib/prisma.js'
 
@@ -10,15 +11,23 @@ import { prisma } from '../lib/prisma.js'
  * une clé normalisée producteur+nom+millésime. Ranger 6 bouteilles du même Bordeaux ne doit
  * créer qu'un seul `Wine`.
  */
-export async function upsertWine(data: WineData): Promise<string> {
+export async function upsertWine(
+  data: WineData,
+  transaction?: Prisma.TransactionClient,
+): Promise<string> {
+  if (!transaction) {
+    return prisma.$transaction((tx) => upsertWine(data, tx))
+  }
+
+  const db = transaction
   const dedupeKey = buildDedupeKey(data.producer, data.name, data.vintage)
 
   const existing = data.vivinoId
-    ? await prisma.wine.findFirst({
+    ? await db.wine.findFirst({
         where: { OR: [{ vivinoId: data.vivinoId }, { dedupeKey }] },
         select: { id: true, source: true },
       })
-    : await prisma.wine.findUnique({ where: { dedupeKey }, select: { id: true, source: true } })
+    : await db.wine.findUnique({ where: { dedupeKey }, select: { id: true, source: true } })
 
   const fields = {
     name: data.name,
@@ -52,36 +61,43 @@ export async function upsertWine(data: WineData): Promise<string> {
     const downgrade = existing.source === 'VIVINO' && data.source !== 'VIVINO'
     wineId = existing.id
     if (!downgrade) {
-      await prisma.wine.update({ where: { id: existing.id }, data: fields })
+      await db.wine.update({ where: { id: existing.id }, data: fields })
     }
   } else {
-    const created = await prisma.wine.create({ data: fields })
+    const created = await db.wine.create({ data: fields })
     wineId = created.id
   }
 
-  await syncFoodTags(wineId, data.foodTags)
+  await syncFoodTags(wineId, data.foodTags, db)
   return wineId
 }
 
 /** Remplace les accords d'un vin. Les tags inconnus du référentiel sont ignorés. */
-export async function syncFoodTags(wineId: string, slugs: string[]): Promise<void> {
+export async function syncFoodTags(
+  wineId: string,
+  slugs: string[],
+  transaction?: Prisma.TransactionClient,
+): Promise<void> {
   if (slugs.length === 0) return
+
+  if (!transaction) {
+    await prisma.$transaction((tx) => syncFoodTags(wineId, slugs, tx))
+    return
+  }
 
   const known = new Set(FOOD_TAGS.map((t) => t.slug))
   const valid = [...new Set(slugs.filter((s) => known.has(s)))]
   if (valid.length === 0) return
 
-  const tags = await prisma.foodTag.findMany({
+  const tags = await transaction.foodTag.findMany({
     where: { slug: { in: valid } },
     select: { id: true },
   })
 
-  await prisma.$transaction([
-    prisma.wineFoodTag.deleteMany({ where: { wineId } }),
-    prisma.wineFoodTag.createMany({
-      data: tags.map((tag) => ({ wineId, foodTagId: tag.id })),
-    }),
-  ])
+  await transaction.wineFoodTag.deleteMany({ where: { wineId } })
+  await transaction.wineFoodTag.createMany({
+    data: tags.map((tag) => ({ wineId, foodTagId: tag.id })),
+  })
 }
 
 /**

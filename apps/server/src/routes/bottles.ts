@@ -11,6 +11,16 @@ import { searchBottles } from '../services/search.js'
 import { serializeBottle } from '../services/serialize.js'
 import { drinkingWindow, upsertWine } from '../services/wines.js'
 
+class BottlePlacementError extends Error {
+  constructor(
+    readonly missingSlotNumbers: number[],
+    readonly occupiedSlotNumbers: number[],
+  ) {
+    super('Emplacements indisponibles')
+    this.name = 'BottlePlacementError'
+  }
+}
+
 export default async function bottleRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate)
 
@@ -27,41 +37,89 @@ export default async function bottleRoutes(app: FastifyInstance) {
     if (!parsed.success) {
       return reply.code(400).send({ error: 'Requête invalide', issues: parsed.error.issues })
     }
-    const { wine, rackId, slotNumber, personalNote, purchasePrice, labelPhotoPath } = parsed.data
+    const { wine, rackId, personalNote, purchasePrice, labelPhotoPath } = parsed.data
+    const requestedNumbers = parsed.data.slotNumbers ?? [parsed.data.slotNumber!]
 
-    const slot = await prisma.slot.findUnique({
-      where: { rackId_number: { rackId, number: slotNumber } },
-      include: { bottles: { where: { status: 'IN_CELLAR' } } },
+    const result = await prisma.$transaction(async (tx) => {
+      const slots = await tx.slot.findMany({
+        where: { rackId, number: { in: requestedNumbers } },
+        include: { bottles: { where: { status: 'IN_CELLAR' } } },
+      })
+      const slotsByNumber = new Map(slots.map((slot) => [slot.number, slot]))
+      const missingSlotNumbers = requestedNumbers.filter((number) => !slotsByNumber.has(number))
+      const occupiedSlotNumbers = requestedNumbers.filter(
+        (number) => (slotsByNumber.get(number)?.bottles.length ?? 0) > 0,
+      )
+
+      // Lever une erreur dans la transaction garantit qu'aucun exemplaire — et aucune
+      // mise à jour de la fiche vin — ne subsiste si un seul emplacement pose problème.
+      if (missingSlotNumbers.length > 0 || occupiedSlotNumbers.length > 0) {
+        throw new BottlePlacementError(missingSlotNumbers, occupiedSlotNumbers)
+      }
+
+      const wineId = await upsertWine(enrichWineData(wine), tx)
+      await tx.bottle.createMany({
+        data: requestedNumbers.map((slotNumber) => ({
+          wineId,
+          slotId: slotsByNumber.get(slotNumber)!.id,
+          status: 'IN_CELLAR',
+          addedById: req.currentUser!.id,
+          personalNote,
+          purchasePrice,
+          labelPhotoPath,
+        })),
+      })
+
+      const createdBottles = await tx.bottle.findMany({
+        where: { slotId: { in: slots.map((slot) => slot.id) }, status: 'IN_CELLAR' },
+        include: {
+          wine: { include: { foodTags: { include: { foodTag: true } } } },
+          slot: { include: { rack: true } },
+        },
+      })
+      if (createdBottles.length !== requestedNumbers.length) {
+        throw new Error('Le lot créé est incomplet, la transaction doit être annulée.')
+      }
+      const bottlesBySlotId = new Map(
+        createdBottles.map((bottle) => [bottle.slotId, serializeBottle(bottle)]),
+      )
+
+      return requestedNumbers.map(
+        (slotNumber) => bottlesBySlotId.get(slotsByNumber.get(slotNumber)!.id)!,
+      )
+    }).catch((error: unknown) => {
+      if (error instanceof BottlePlacementError) return error
+      throw error
     })
 
-    if (!slot) {
-      return reply.code(400).send({ error: `L’emplacement ${slotNumber} n’existe pas dans ce casier.` })
+    if (result instanceof BottlePlacementError) {
+      const affected = requestedNumbers.filter(
+        (number) =>
+          result.missingSlotNumbers.includes(number) ||
+          result.occupiedSlotNumbers.includes(number),
+      )
+      const singular = affected.length === 1
+      const missingMessage = result.missingSlotNumbers.length
+        ? result.missingSlotNumbers.length === 1
+          ? `L’emplacement ${result.missingSlotNumbers[0]} n’existe pas dans ce casier.`
+          : `Les emplacements ${result.missingSlotNumbers.join(', ')} n’existent pas dans ce casier.`
+        : ''
+      const occupiedMessage = result.occupiedSlotNumbers.length
+        ? result.occupiedSlotNumbers.length === 1
+          ? `L’emplacement ${result.occupiedSlotNumbers[0]} est déjà occupé.`
+          : `Les emplacements ${result.occupiedSlotNumbers.join(', ')} sont déjà occupés.`
+        : ''
+
+      return reply.code(result.missingSlotNumbers.length > 0 ? 400 : 409).send({
+        error: [missingMessage, occupiedMessage].filter(Boolean).join(' '),
+        ...(singular ? { slotNumber: affected[0] } : {}),
+        slotNumbers: affected,
+        missingSlotNumbers: result.missingSlotNumbers,
+        occupiedSlotNumbers: result.occupiedSlotNumbers,
+      })
     }
-    if (slot.bottles.length > 0) {
-      return reply
-        .code(409)
-        .send({ error: `L’emplacement ${slotNumber} est déjà occupé.`, slotNumber })
-    }
 
-    const wineId = await upsertWine(enrichWineData(wine))
-
-    const bottle = await prisma.bottle.create({
-      data: {
-        wineId,
-        slotId: slot.id,
-        status: 'IN_CELLAR',
-        addedById: req.currentUser!.id,
-        personalNote,
-        purchasePrice,
-        labelPhotoPath,
-      },
-      include: {
-        wine: { include: { foodTags: { include: { foodTag: true } } } },
-        slot: { include: { rack: true } },
-      },
-    })
-
-    return reply.code(201).send({ bottle: serializeBottle(bottle) })
+    return reply.code(201).send({ bottle: result[0], bottles: result })
   })
 
   app.get('/:id', async (req, reply) => {

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  MAX_BOTTLES_PER_ADD,
   MAX_RACK_SIDE,
+  MAX_SLOT_NUMBER,
   createBottleSchema,
   createRackSchema,
   drinkBottleSchema,
@@ -122,6 +124,88 @@ describe('createBottleSchema — ce qui doit rester refusé', () => {
 
   it('refuse un prix négatif', () => {
     expect(createBottleSchema.safeParse({ ...bottle, purchasePrice: -5 }).success).toBe(false)
+  })
+})
+
+describe('createBottleSchema — ajout de plusieurs exemplaires', () => {
+  it('accepte plusieurs emplacements uniques dans un même casier', () => {
+    const { slotNumber: _slotNumber, ...common } = bottle
+    const result = createBottleSchema.safeParse({ ...common, slotNumbers: [12, 14, 20, 21] })
+
+    expect(result.success).toBe(true)
+    expect(result.success && result.data.slotNumbers).toEqual([12, 14, 20, 21])
+  })
+
+  it('conserve le contrat historique avec un seul slotNumber', () => {
+    const result = createBottleSchema.safeParse(bottle)
+
+    expect(result.success).toBe(true)
+    expect(result.success && result.data.slotNumber).toBe(27)
+  })
+
+  it('refuse de mélanger les contrats unitaire et multiple', () => {
+    const result = createBottleSchema.safeParse({ ...bottle, slotNumbers: [12, 14] })
+
+    expect(result.success).toBe(false)
+    expect(result.success === false && result.error.issues[0]?.path).toEqual(['slotNumbers'])
+  })
+
+  it('refuse les doublons au lieu de les ignorer silencieusement', () => {
+    const { slotNumber: _slotNumber, ...common } = bottle
+    const result = createBottleSchema.safeParse({ ...common, slotNumbers: [12, 14, 12] })
+
+    expect(result.success).toBe(false)
+    expect(result.success === false && result.error.issues[0]?.message).toContain(
+      'ne peut être sélectionné qu’une fois',
+    )
+  })
+
+  it('refuse un lot vide ou supérieur à la limite', () => {
+    const { slotNumber: _slotNumber, ...common } = bottle
+
+    expect(createBottleSchema.safeParse({ ...common, slotNumbers: [] }).success).toBe(false)
+    expect(
+      createBottleSchema.safeParse({
+        ...common,
+        slotNumbers: Array.from({ length: MAX_BOTTLES_PER_ADD + 1 }, (_, index) => index),
+      }).success,
+    ).toBe(false)
+  })
+
+  it('refuse une requête sans aucune forme d’emplacement', () => {
+    const { slotNumber: _slotNumber, ...common } = bottle
+
+    expect(createBottleSchema.safeParse(common).success).toBe(false)
+  })
+
+  it('refuse les chaînes vides sans les convertir silencieusement en emplacement 0', () => {
+    const { slotNumber: _slotNumber, ...common } = bottle
+    const result = createBottleSchema.safeParse({ ...common, slotNumbers: ['   '] })
+
+    expect(result.success).toBe(false)
+    expect(result.success === false && result.error.issues[0]?.message).toBe(
+      'Indique le numéro d’emplacement.',
+    )
+  })
+
+  it('retourne des erreurs françaises pour la forme et les bornes du lot', () => {
+    const { slotNumber: _slotNumber, ...common } = bottle
+    const wrongShape = createBottleSchema.safeParse({ ...common, slotNumbers: '12' })
+    const belowMinimum = createBottleSchema.safeParse({ ...common, slotNumbers: [-1] })
+    const aboveMaximum = createBottleSchema.safeParse({
+      ...common,
+      slotNumbers: [MAX_SLOT_NUMBER + 1],
+    })
+
+    expect(wrongShape.success === false && wrongShape.error.issues[0]?.message).toBe(
+      'Indique une liste de numéros d’emplacements.',
+    )
+    expect(belowMinimum.success === false && belowMinimum.error.issues[0]?.message).toBe(
+      'Le numéro d’emplacement doit être positif ou nul.',
+    )
+    expect(aboveMaximum.success === false && aboveMaximum.error.issues[0]?.message).toContain(
+      'ne peut pas dépasser',
+    )
   })
 })
 

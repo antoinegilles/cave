@@ -47,7 +47,9 @@ function requiredNumber(message: string) {
       (value) => {
         if (value === '' || value === null || value === undefined) return undefined
         if (typeof value === 'string') {
-          const parsed = Number(value.replace(',', '.'))
+          const normalized = value.trim()
+          if (!normalized) return undefined
+          const parsed = Number(normalized.replace(',', '.'))
           return Number.isFinite(parsed) ? parsed : undefined
         }
         return value
@@ -99,6 +101,8 @@ export const changePasswordSchema = z.object({
 export const MAX_RACK_SIDE = 200
 export const MAX_RACK_SLOTS = 10_000
 export const MAX_SLOT_NUMBER = 999_999
+/** Un ajout en lot reste volontairement borné pour protéger l'API et l'interface. */
+export const MAX_BOTTLES_PER_ADD = 100
 
 const rackShape = {
   name: z.string().min(1, 'Nom requis').max(60),
@@ -208,21 +212,64 @@ export type Candidate = z.infer<typeof candidateSchema>
 
 /* --------------------------------------------------------------- bottles */
 
-export const createBottleSchema = z.object({
-  wine: wineDataSchema,
-  rackId: z.string().min(1),
-  slotNumber: requiredNumber('Indique le numéro d’emplacement.')((n) => n.int().min(0).max(9999)),
-  personalNote: z.string().max(2000).nullable().default(null),
-  purchasePrice: optionalNumber(z.number().min(0).max(100000)).default(null),
-  labelPhotoPath: z.string().max(300).nullable().default(null),
-})
+const bottleSlotNumberSchema = requiredNumber('Indique le numéro d’emplacement.')((n) =>
+  n
+    .int('Le numéro d’emplacement doit être un nombre entier.')
+    .min(0, 'Le numéro d’emplacement doit être positif ou nul.')
+    .max(
+      MAX_SLOT_NUMBER,
+      `Le numéro d’emplacement ne peut pas dépasser ${MAX_SLOT_NUMBER.toLocaleString('fr-FR')}.`,
+    ),
+)
+
+export const createBottleSchema = z
+  .object({
+    wine: wineDataSchema,
+    rackId: z.string().min(1),
+    /** Contrat historique, conservé pour les anciens clients. */
+    slotNumber: bottleSlotNumberSchema.optional(),
+    /** Contrat d'ajout en lot : tous les emplacements appartiennent au même casier. */
+    slotNumbers: z
+      .array(bottleSlotNumberSchema, {
+        invalid_type_error: 'Indique une liste de numéros d’emplacements.',
+      })
+      .min(1, 'Indique au moins un emplacement.')
+      .max(
+        MAX_BOTTLES_PER_ADD,
+        `Tu peux ajouter au maximum ${MAX_BOTTLES_PER_ADD} bouteilles à la fois.`,
+      )
+      .optional(),
+    personalNote: z.string().max(2000).nullable().default(null),
+    purchasePrice: optionalNumber(z.number().min(0).max(100000)).default(null),
+    labelPhotoPath: z.string().max(300).nullable().default(null),
+  })
+  .superRefine((data, ctx) => {
+    const hasSingle = data.slotNumber !== undefined
+    const hasMany = data.slotNumbers !== undefined
+
+    if (hasSingle === hasMany) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: hasMany ? ['slotNumbers'] : ['slotNumber'],
+        message: 'Indique soit un emplacement, soit une liste d’emplacements.',
+      })
+    }
+
+    if (data.slotNumbers && new Set(data.slotNumbers).size !== data.slotNumbers.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['slotNumbers'],
+        message: 'Un même emplacement ne peut être sélectionné qu’une fois.',
+      })
+    }
+  })
 export type CreateBottleInput = z.infer<typeof createBottleSchema>
 
 export const updateBottleSchema = z.object({
   personalNote: z.string().max(2000).nullable().optional(),
   purchasePrice: optionalNumber(z.number().min(0).max(100000)).optional(),
   rackId: z.string().min(1).optional(),
-  slotNumber: z.number().int().min(0).max(9999).optional(),
+  slotNumber: z.number().int().min(0).max(MAX_SLOT_NUMBER).optional(),
 })
 
 export const drinkBottleSchema = z.object({

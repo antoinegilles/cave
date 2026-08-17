@@ -50,7 +50,7 @@ export const FOOD_TAGS: FoodTagDef[] = [
     emoji: '🍗',
     synonyms: [
       'poultry', 'volaille', 'poulet', 'chicken', 'dinde', 'chapon', 'pintade', 'canard',
-      'duck', 'magret', 'coq au vin', 'confit',
+      'duck', 'magret', 'coq au vin', 'confit', 'viande blanche',
     ],
   },
   {
@@ -142,6 +142,8 @@ export const FOOD_TAGS: FoodTagDef[] = [
     synonyms: [
       'mild cheese', 'soft cheese', 'fromage doux', 'fromage a pate molle', 'brie',
       'camembert', 'coulommiers', 'reblochon', 'mozzarella', 'burrata',
+      // Plats à base de fromage à pâte molle.
+      'tartiflette', 'mont dor', 'croque monsieur',
     ],
   },
   {
@@ -151,6 +153,8 @@ export const FOOD_TAGS: FoodTagDef[] = [
     synonyms: [
       'hard cheese', 'mature and hard cheese', 'fromage a pate dure', 'comte', 'gruyere',
       'beaufort', 'parmesan', 'cantal', 'mimolette', 'tomme', 'abondance',
+      // Plats de fromage fondu : ce qu'on tape vraiment un soir d'hiver.
+      'raclette', 'fondue', 'fondue savoyarde', 'aligot', 'croziflette',
     ],
   },
   {
@@ -265,12 +269,44 @@ export function matchFoodTag(input: string): string | undefined {
 }
 
 /**
+ * Mots-clés génériques d'une catégorie : « poisson », « fromage », « viande »…
+ *
+ * Un mot n'est retenu que s'il ouvre **au moins deux** termes du référentiel. C'est ce qui
+ * distingue une catégorie d'un produit précis : « fromage » ouvre « fromage doux », « fromage
+ * bleu », « fromage de chèvre »… alors que « sainte » n'ouvre que « sainte maure ». Sans ce
+ * filtre, chercher un Château Sainte-Anne allumerait les fromages de chèvre.
+ *
+ * Le seuil se maintient tout seul : ajouter un synonyme suffit à promouvoir sa tête. C'est
+ * aussi son danger — « fruit » n'ouvre aujourd'hui que « fruits de mer » et reste donc écarté,
+ * mais ajouter un « fruits rouges » côté dessert le promouvrait et « un dessert aux fruits »
+ * remonterait les crustacés. Vérifier ce que devient une tête avant d'enrichir la liste.
+ */
+const CATEGORY_HEADS = (() => {
+  const counts = new Map<string, number>()
+  for (const term of SYNONYM_INDEX.keys()) {
+    const termWords = words(term)
+    if (termWords.length < 2) continue
+    const head = termWords[0]!
+    if (head.length < 4) continue
+    counts.set(head, (counts.get(head) ?? 0) + 1)
+  }
+  return new Set([...counts].filter(([, n]) => n >= 2).map(([head]) => head))
+})()
+
+/**
  * Variante multi-résultats pour la recherche utilisateur : « poisson » doit allumer les
  * emplacements des vins accordés au poisson maigre ET au poisson gras.
  *
- * La correspondance joue dans les deux sens, mais toujours par mots entiers : la requête
- * peut être plus riche que le terme (« je mange du poisson ») ou plus pauvre
- * (« poisson » face à « poisson gras »).
+ * Trois règles, toutes par mots entiers — jamais par sous-chaîne, sinon « chevre »
+ * remonterait « chevreuil » :
+ *
+ *  1. le terme figure tel quel dans la requête : « je fais un bœuf bourguignon » ;
+ *  2. la requête tient dans le terme : « poisson » face à « poisson gras » ;
+ *  3. un mot générique de la requête ouvre le terme : « je mange du poisson ».
+ *
+ * La règle 3 est celle qui manquait. Sans elle, la moindre phrase cassait la reconnaissance :
+ * « poisson » remontait deux tags mais « du poisson » aucun, parce qu'une requête de deux mots
+ * ne tient plus dans un terme et qu'aucun synonyme ne s'appelle « du poisson ».
  */
 export function matchFoodTags(input: string): string[] {
   const normalized = normalizeFoodTerm(input)
@@ -282,10 +318,17 @@ export function matchFoodTags(input: string): string[] {
   for (const [term, slug] of SYNONYM_INDEX) {
     if (term.length < 3) continue
     const termWords = words(term)
+
     if (
       containsWordSequence(inputWords, termWords) ||
       containsWordSequence(termWords, inputWords)
     ) {
+      matches.add(slug)
+      continue
+    }
+
+    const head = termWords[0]
+    if (termWords.length > 1 && head && CATEGORY_HEADS.has(head) && inputWords.includes(head)) {
       matches.add(slug)
     }
   }

@@ -58,6 +58,46 @@ describe('matchFoodTags — recherche utilisateur', () => {
     expect(matchFoodTags('un gigot pour six personnes')).toContain('lamb')
   })
 
+  /**
+   * Régression : une phrase construite autour d'un mot **générique** ne remontait rien.
+   * « poisson » seul donnait deux tags, mais « du poisson » aucun — une requête de deux mots
+   * ne tient plus dans un terme, et aucun synonyme ne s'appelle « du poisson ». Le cas de
+   * l'exemple ci-dessous est celui que la documentation de `matchFoodTags` promettait déjà.
+   */
+  it('comprend une phrase construite sur un mot générique', () => {
+    for (const phrase of ['du poisson', 'je mange du poisson', 'un poisson pour ce soir']) {
+      expect(matchFoodTags(phrase)).toContain('rich-fish')
+      expect(matchFoodTags(phrase)).toContain('lean-fish')
+    }
+    expect(matchFoodTags('avec du fromage')).toContain('hard-cheese')
+    // « viande » n'ouvre une catégorie que depuis l'ajout de « viande blanche ».
+    expect(matchFoodTags('je sers une viande')).toContain('beef')
+    expect(matchFoodTags('je sers une viande')).toContain('poultry')
+  })
+
+  /**
+   * Garde-fou du seuil : « fruit » n'ouvre que « fruits de mer ». Il ne doit donc pas être
+   * traité comme un mot générique, sans quoi un dessert remonterait les crustacés.
+   */
+  it('n’érige pas « fruit » en catégorie', () => {
+    expect(matchFoodTags('un dessert aux fruits')).not.toContain('shellfish')
+  })
+
+  /**
+   * Le mot générique doit ouvrir au moins deux termes du référentiel, sinon un nom de
+   * domaine deviendrait un accord : « sainte » n'ouvre que « sainte maure ».
+   */
+  it('n’allume pas un accord sur un nom de domaine', () => {
+    expect(matchFoodTags('chateau sainte anne')).toEqual([])
+    expect(matchFoodTags('un vin de bordeaux')).toEqual([])
+  })
+
+  it('reconnaît les plats de fromage fondu', () => {
+    expect(matchFoodTags('je fais une raclette')).toContain('hard-cheese')
+    expect(matchFoodTags('fondue savoyarde')).toContain('hard-cheese')
+    expect(matchFoodTags('tartiflette')).toContain('mild-cheese')
+  })
+
   it('tolère le pluriel', () => {
     expect(matchFoodTags('huitre')).toContain('shellfish')
     expect(matchFoodTags('huitres')).toContain('shellfish')

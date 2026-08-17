@@ -46,6 +46,7 @@ watch(
 const allBottles = computed(() =>
   cellar.racks.flatMap((rack) => rack.slots.map((slot) => slot.bottle).filter((b) => b !== null)),
 )
+const totalWines = computed(() => new Set(allBottles.value.map((bottle) => bottle.wine.id)).size)
 
 /** En recherche, on liste les résultats ; sinon toute la cave. */
 const listedBottles = computed(() =>
@@ -160,13 +161,15 @@ function openBottle(bottleId: string): void {
 
     <template v-else>
       <p class="px-1 text-sm text-muted">
-        {{ plural(cellar.totalBottles, 'bouteille') }} · {{ cellar.totalSlots }} emplacements
+        {{ plural(totalWines, 'vin') }} · {{ plural(cellar.totalBottles, 'bouteille') }} ·
+        {{ cellar.totalSlots }} emplacements
       </p>
 
       <!-- Liste -->
       <BottleList
         v-if="prefs.viewMode === 'list'"
         :bottles="listedBottles"
+        :rack-order="cellar.racks.map((rack) => rack.id)"
         :highlighted-ids="highlightedIds"
         :empty-message="
           cellar.searchActive

@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import {
   MAX_BOTTLES_PER_ADD,
+  MAX_BOTTLES_PER_DRINK,
   MAX_RACK_SIDE,
   MAX_SLOT_NUMBER,
   createBottleSchema,
   createRackSchema,
   drinkBottleSchema,
+  drinkBottlesSchema,
+  sommelierResponseSchema,
+  sommelierStatusSchema,
+  updateBottleSchema,
   updateSlotNumberSchema,
   wineDataSchema,
 } from './schemas.js'
@@ -215,6 +220,96 @@ describe('drinkBottleSchema', () => {
 
     expect(result.success).toBe(true)
     expect(result.success && result.data.personalRating).toBeNull()
+  })
+})
+
+describe('drinkBottlesSchema', () => {
+  it('accepte de 1 à 100 identifiants uniques avec une dégustation commune', () => {
+    const result = drinkBottlesSchema.safeParse({
+      bottleIds: ['bottle-15', 'bottle-17'],
+      personalRating: 4,
+      personalNote: 'Ouvertes ensemble',
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.success && result.data.bottleIds).toEqual(['bottle-15', 'bottle-17'])
+  })
+
+  it('refuse un lot vide, trop grand ou contenant deux fois le même identifiant', () => {
+    expect(drinkBottlesSchema.safeParse({ bottleIds: [] }).success).toBe(false)
+    expect(
+      drinkBottlesSchema.safeParse({
+        bottleIds: Array.from(
+          { length: MAX_BOTTLES_PER_DRINK + 1 },
+          (_, index) => `bottle-${index}`,
+        ),
+      }).success,
+    ).toBe(false)
+    expect(
+      drinkBottlesSchema.safeParse({ bottleIds: ['bottle-15', 'bottle-15'] }).success,
+    ).toBe(false)
+  })
+})
+
+describe('updateBottleSchema', () => {
+  it('accepte explicitement une note de dégustation nullable pour pouvoir l’effacer', () => {
+    const result = updateBottleSchema.safeParse({ personalRating: null, personalNote: null })
+
+    expect(result.success).toBe(true)
+    expect(result.success && result.data).toMatchObject({
+      personalRating: null,
+      personalNote: null,
+    })
+  })
+
+  it('refuse une note de dégustation hors de 1 à 5', () => {
+    expect(updateBottleSchema.safeParse({ personalRating: 0 }).success).toBe(false)
+    expect(updateBottleSchema.safeParse({ personalRating: 6 }).success).toBe(false)
+  })
+})
+
+describe('schémas sommelier groupés par vin', () => {
+  it('distingue explicitement flag, configuration et quota', () => {
+    expect(
+      sommelierStatusSchema.parse({
+        featureEnabled: false,
+        configured: true,
+        dailyQuota: 3,
+        remaining: 2,
+        maxPromptLength: 250,
+      }),
+    ).toMatchObject({ featureEnabled: false, configured: true, remaining: 2 })
+  })
+
+  it('accepte une recommandation par wineId avec tous ses emplacements', () => {
+    const result = sommelierResponseSchema.safeParse({
+      recommendations: [
+        {
+          wineId: 'wine-1',
+          representativeBottleId: 'bottle-15',
+          label: 'Domaine Exemple 2020',
+          reason: 'Accord équilibré.',
+          locations: [
+            {
+              bottleId: 'bottle-15',
+              rackId: 'rack-1',
+              rackName: 'Cave',
+              slotNumber: 15,
+            },
+            {
+              bottleId: 'bottle-sans-slot',
+              rackId: null,
+              rackName: null,
+              slotNumber: null,
+            },
+          ],
+        },
+      ],
+      note: null,
+      quotaRemaining: 2,
+    })
+
+    expect(result.success).toBe(true)
   })
 })
 

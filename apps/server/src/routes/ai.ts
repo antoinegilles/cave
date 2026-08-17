@@ -1,4 +1,4 @@
-import { sommelierSchema } from '@cave/shared'
+import { AI_PROMPT_MAX_LENGTH, sommelierSchema } from '@cave/shared'
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { GeminiError, isGeminiConfigured } from '../services/gemini.js'
@@ -14,13 +14,15 @@ export default async function aiRoutes(app: FastifyInstance) {
 
   /** État du sommelier — pilote l'affichage du bouton ✨ et du compteur côté client. */
   app.get('/sommelier/status', async (req) => {
-    const enabled = await isSommelierEnabled()
+    const featureEnabled = await isSommelierEnabled()
     return {
-      enabled: enabled && isGeminiConfigured(),
+      featureEnabled,
       configured: isGeminiConfigured(),
       dailyQuota: config.AI_DAILY_QUOTA,
-      remaining: enabled ? await remainingQuota(req.currentUser!.id) : 0,
-      maxPromptLength: 250,
+      // Le quota reste observable même quand un autre garde-fou bloque l'IA : chaque état
+      // a ainsi une signification propre côté client.
+      remaining: await remainingQuota(req.currentUser!.id),
+      maxPromptLength: AI_PROMPT_MAX_LENGTH,
     }
   })
 

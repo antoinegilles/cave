@@ -9,17 +9,20 @@ export default defineConfig({
     vue(),
     tailwindcss(),
     VitePWA({
-      registerType: 'autoUpdate',
+      registerType: 'prompt',
       includeAssets: ['favicon.svg'],
       manifest: {
+        id: '/',
+        lang: 'fr',
         name: 'Cave à vin',
         short_name: 'Cave',
         description: 'La cave à vin, emplacement par emplacement',
-        theme_color: '#2a0e1a',
-        background_color: '#1a0810',
+        theme_color: '#9f1239',
+        background_color: '#f7f7f8',
         display: 'standalone',
         orientation: 'portrait',
         start_url: '/',
+        scope: '/',
         icons: [
           { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
           { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
@@ -30,6 +33,12 @@ export default defineConfig({
         // L'API n'est jamais mise en cache : une cave affichée périmée serait pire que rien.
         navigateFallbackDenylist: [/^\/api/],
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+        runtimeCaching: [
+          {
+            urlPattern: /\/api(?:\/|$)/,
+            handler: 'NetworkOnly',
+          },
+        ],
       },
     }),
   ],

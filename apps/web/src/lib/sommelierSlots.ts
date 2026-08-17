@@ -1,6 +1,8 @@
 interface Recommendation {
-  slotNumber: number | null
-  rackName: string | null
+  locations: {
+    rackId: string | null
+    slotNumber: number | null
+  }[]
 }
 
 interface RackRef {
@@ -10,36 +12,23 @@ interface RackRef {
 }
 
 /**
- * Résout les emplacements recommandés par le sommelier en clés `rackId:slotNumber`.
- *
- * Le repli précédent — « casier inconnu ? on prend le casier actif » — allumait le bon
- * numéro sur le **mauvais** meuble, et envoyait donc chercher une bouteille qui n'y est
- * pas. Un plan éteint est une réponse honnête ; un plan qui ment ne l'est pas.
- *
- * Règles : nom exact → ce casier ; nom absent **et** un seul casier en cave → ce casier,
- * il n'y a pas d'ambiguïté possible ; tout le reste → on n'allume rien.
+ * Résout tous les emplacements physiques renvoyés pour chaque `Wine`. `rackId` est la clé
+ * canonique : deux casiers homonymes ne peuvent plus rendre l'allumage ambigu.
  */
 export function resolveRecommendationSlots(
   recommendations: Recommendation[],
   racks: RackRef[],
 ): string[] {
-  const byName = new Map<string, RackRef[]>()
-  for (const rack of racks) {
-    const matches = byName.get(rack.name) ?? []
-    matches.push(rack)
-    byName.set(rack.name, matches)
-  }
-  const onlyRack = racks.length === 1 ? racks[0] : null
+  const byId = new Map(racks.map((rack) => [rack.id, rack]))
 
   const keys = new Set<string>()
   for (const reco of recommendations) {
-    if (reco.slotNumber === null) continue
-
-    const named = reco.rackName ? byName.get(reco.rackName) : null
-    const rack = named?.length === 1 ? named[0] : reco.rackName ? null : onlyRack
-    if (!rack?.slots.some((slot) => slot.number === reco.slotNumber)) continue
-
-    keys.add(`${rack.id}:${reco.slotNumber}`)
+    for (const location of reco.locations) {
+      if (location.rackId === null || location.slotNumber === null) continue
+      const rack = byId.get(location.rackId)
+      if (!rack?.slots.some((slot) => slot.number === location.slotNumber)) continue
+      keys.add(`${rack.id}:${location.slotNumber}`)
+    }
   }
 
   return [...keys]

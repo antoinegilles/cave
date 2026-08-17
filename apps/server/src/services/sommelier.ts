@@ -21,10 +21,10 @@ const RESPONSE_SCHEMA = {
       items: {
         type: 'OBJECT',
         properties: {
-          id: { type: 'STRING' },
+          wineId: { type: 'STRING' },
           reason: { type: 'STRING' },
         },
-        required: ['id', 'reason'],
+        required: ['wineId', 'reason'],
       },
     },
     note: { type: 'STRING', nullable: true },
@@ -33,12 +33,12 @@ const RESPONSE_SCHEMA = {
 } as const
 
 const SYSTEM_INSTRUCTION = `Tu es sommelier. On te donne la liste des vins réellement présents
-dans une cave, puis un repas.
+dans une cave, puis une recherche pouvant décrire un plat, un domaine, une cuvée ou un style.
 
 Règles :
-- Choisis au maximum 3 vins, UNIQUEMENT parmi la liste fournie, via leur identifiant exact.
+- Choisis au maximum 3 vins, UNIQUEMENT parmi la liste fournie, via leur wineId exact.
 - Si aucun vin ne convient vraiment, renvoie une liste vide et explique-le dans "note".
-- "reason" : une phrase courte en français expliquant l'accord (30 mots maximum).
+- "reason" : une phrase courte en français expliquant la correspondance ou l'accord (30 mots maximum).
 - "note" : une remarque de service utile (température, carafage), ou null.
 - N'invente aucun vin absent de la liste.`
 
@@ -70,32 +70,64 @@ export class QuotaExceededError extends Error {
   }
 }
 
-interface CellarLine {
+interface CellarLocation {
   bottleId: string
-  label: string
-  slotNumber: number | null
+  rackId: string | null
   rackName: string | null
+  slotNumber: number | null
 }
 
-/** Une ligne compacte par vin — c'est le poste de dépense en tokens, on le garde serré. */
-async function buildCellarContext(): Promise<{ lines: string[]; index: Map<string, CellarLine> }> {
-  const bottles = await prisma.bottle.findMany({
-    where: { status: 'IN_CELLAR' },
+interface CellarWine {
+  wineId: string
+  representativeBottleId: string
+  label: string
+  locations: CellarLocation[]
+}
+
+function oneLine(value: string): string {
+  return value.replace(/[|\r\n]+/g, ' ').trim()
+}
+
+/** Les emplacements utilisent aussi `:` et `,` comme séparateurs internes. */
+function oneLocationCell(value: string): string {
+  return value.replace(/[|,:\r\n]+/g, ' ').trim()
+}
+
+/**
+ * Une ligne compacte par `Wine`, avec tous ses exemplaires encore en cave. La limite porte
+ * sur les vins, pas sur les bouteilles : un carton ne doit jamais perdre cinq emplacements
+ * simplement parce que ses exemplaires occupent le plafond de contexte.
+ */
+async function buildCellarContext(): Promise<{ lines: string[]; index: Map<string, CellarWine> }> {
+  const wines = await prisma.wine.findMany({
+    where: { bottles: { some: { status: 'IN_CELLAR' } } },
     take: config.AI_MAX_CONTEXT_WINES,
-    orderBy: { addedAt: 'desc' },
+    orderBy: { updatedAt: 'desc' },
     include: {
-      wine: { include: { foodTags: { include: { foodTag: true } } } },
-      slot: { include: { rack: true } },
+      foodTags: { include: { foodTag: true } },
+      bottles: {
+        where: { status: 'IN_CELLAR' },
+        orderBy: { addedAt: 'desc' },
+        include: { slot: { include: { rack: true } } },
+      },
     },
   })
 
-  const index = new Map<string, CellarLine>()
+  const index = new Map<string, CellarWine>()
   const lines: string[] = []
 
-  for (const bottle of bottles) {
-    const wine = bottle.wine
-    const label = [wine.producer, wine.name, wine.vintage].filter(Boolean).join(' ')
+  for (const wine of wines) {
+    const representative = wine.bottles.find((bottle) => bottle.slot !== null) ?? wine.bottles[0]
+    if (!representative) continue
+
+    const label = oneLine([wine.producer, wine.name, wine.vintage].filter(Boolean).join(' '))
     const foods = wine.foodTags.map((ft) => getFoodTag(ft.foodTag.slug)?.labelFr ?? ft.foodTag.slug)
+    const locations = wine.bottles.map((bottle) => ({
+      bottleId: bottle.id,
+      rackId: bottle.slot?.rack.id ?? null,
+      rackName: bottle.slot?.rack.name ?? null,
+      slotNumber: bottle.slot?.number ?? null,
+    }))
 
     let structure: Record<string, number | null> = {}
     try {
@@ -108,37 +140,71 @@ async function buildCellarContext(): Promise<{ lines: string[]; index: Map<strin
       .map(([k, v]) => `${k[0]}${v}`)
       .join('')
 
+    const compactLocations = locations
+      .map((location) =>
+        [
+          location.bottleId,
+          location.rackId ?? '-',
+          oneLocationCell(location.rackName ?? '-'),
+          location.slotNumber ?? '-',
+        ].join(':'),
+      )
+      .join(',')
+
     lines.push(
       [
-        bottle.id,
+        wine.id,
         label,
         wine.color ?? '?',
-        wine.region ?? '?',
+        oneLine(wine.region ?? '?'),
         wine.vivinoRating != null ? `${wine.vivinoRating}/5` : '-',
-        foods.join('/') || '-',
+        foods.map(oneLine).join('/') || '-',
         profile || '-',
+        compactLocations,
       ].join('|'),
     )
 
-    index.set(bottle.id, {
-      bottleId: bottle.id,
+    index.set(wine.id, {
+      wineId: wine.id,
+      representativeBottleId: representative.id,
       label,
-      slotNumber: bottle.slot?.number ?? null,
-      rackName: bottle.slot?.rack.name ?? null,
+      locations,
     })
   }
 
   return { lines, index }
 }
 
-export async function askSommelier(userId: string, prompt: string): Promise<SommelierResponse> {
-  // Le quota est vérifié puis consommé immédiatement par la création de la ligne AiQuery :
-  // deux requêtes simultanées ne peuvent pas passer toutes les deux sur le dernier crédit.
-  if ((await countTodayQueries(userId)) >= config.AI_DAILY_QUOTA) {
-    throw new QuotaExceededError()
-  }
+const quotaTails = new Map<string, Promise<void>>()
 
-  const query = await prisma.aiQuery.create({ data: { userId, prompt } })
+/**
+ * Sérialise la courte réservation par utilisateur. Le déploiement est mono-processus et le
+ * décompte reste en base : un redémarrage conserve donc le quota, tandis que deux onglets ne
+ * peuvent plus réserver le même dernier crédit.
+ */
+async function reserveQuery(userId: string, prompt: string) {
+  const previous = quotaTails.get(userId) ?? Promise.resolve()
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const tail = previous.catch(() => undefined).then(() => gate)
+  quotaTails.set(userId, tail)
+
+  await previous.catch(() => undefined)
+  try {
+    if ((await countTodayQueries(userId)) >= config.AI_DAILY_QUOTA) {
+      throw new QuotaExceededError()
+    }
+    return await prisma.aiQuery.create({ data: { userId, prompt } })
+  } finally {
+    release()
+    if (quotaTails.get(userId) === tail) quotaTails.delete(userId)
+  }
+}
+
+export async function askSommelier(userId: string, prompt: string): Promise<SommelierResponse> {
+  const query = await reserveQuery(userId, prompt)
 
   try {
     const { lines, index } = await buildCellarContext()
@@ -154,13 +220,13 @@ export async function askSommelier(userId: string, prompt: string): Promise<Somm
     }
 
     const { data, usage } = await generateStructured<{
-      recommendations: { id: string; reason: string }[]
+      recommendations: { wineId: string; reason: string }[]
       note: string | null
     }>({
       systemInstruction: SYSTEM_INSTRUCTION,
       parts: [
         {
-          text: `Vins en cave (format id|nom|couleur|région|note|accords|profil) :\n${lines.join('\n')}\n\nRepas : ${prompt}`,
+          text: `Vins en cave (format wineId|nom|couleur|région|note|accords|profil|bottleId:rackId:casier:slot,...) :\n${lines.join('\n')}\n\nRecherche : ${prompt}`,
         },
       ],
       responseSchema: RESPONSE_SCHEMA as unknown as Record<string, unknown>,
@@ -169,22 +235,26 @@ export async function askSommelier(userId: string, prompt: string): Promise<Somm
       enableGrounding: config.AI_ENABLE_GROUNDING,
     })
 
-    // Le modèle peut halluciner un identifiant : on ne garde que les bouteilles réellement
-    // présentes en cave, sinon on afficherait un emplacement qui n'existe pas.
-    const recommendations = (data.recommendations ?? [])
-      .map((rec) => {
-        const found = index.get(rec.id)
-        if (!found) return null
-        return {
-          bottleId: found.bottleId,
-          slotNumber: found.slotNumber,
-          rackName: found.rackName,
-          label: found.label,
-          reason: rec.reason,
-        }
+    // Le modèle peut halluciner ou répéter un wineId. Le serveur reste la source de vérité :
+    // il reconstruit les emplacements depuis l'index contrôlé et ne garde qu'un vin unique.
+    const recommendations: SommelierResponse['recommendations'] = []
+    const seenWineIds = new Set<string>()
+    for (const rec of data.recommendations ?? []) {
+      if (recommendations.length >= 3) break
+      if (!rec || typeof rec.wineId !== 'string' || typeof rec.reason !== 'string') continue
+      if (seenWineIds.has(rec.wineId)) continue
+
+      const found = index.get(rec.wineId)
+      if (!found) continue
+      seenWineIds.add(rec.wineId)
+      recommendations.push({
+        wineId: found.wineId,
+        representativeBottleId: found.representativeBottleId,
+        label: found.label,
+        reason: rec.reason,
+        locations: found.locations,
       })
-      .filter((r): r is NonNullable<typeof r> => r !== null)
-      .slice(0, 3)
+    }
 
     await prisma.aiQuery.update({
       where: { id: query.id },

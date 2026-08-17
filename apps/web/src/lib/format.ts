@@ -53,3 +53,26 @@ export function groupedSlotAnswer(total: number, label: string, groups: SlotGrou
   })
   return `${found} — ${places.join(' ; ')}.`
 }
+
+/** Annonce séparément les fiches vin regroupées et leurs exemplaires physiques. */
+export function groupedBottleSlotAnswer(
+  wineTotal: number,
+  bottleTotal: number,
+  label: string,
+  groups: SlotGroup[],
+  includeRackNames = false,
+): string {
+  if (wineTotal === 0) return `Aucun vin trouvé pour « ${label} ».`
+  const found = `${plural(wineTotal, 'vin trouvé', 'vins trouvés')} · ${plural(bottleTotal, 'bouteille')} pour « ${label} »`
+  if (groups.length === 0) return `${found}.`
+
+  const places = groups.map((group) => {
+    const noun = group.numbers.length > 1 ? 'emplacements' : 'emplacement'
+    return `casier ${group.rackName} : ${noun} ${joinFr(group.numbers)}`
+  })
+  if (groups.length === 1 && !includeRackNames) {
+    const noun = groups[0]!.numbers.length > 1 ? 'emplacements' : 'emplacement'
+    return `${found} — ${noun} ${joinFr(groups[0]!.numbers)}.`
+  }
+  return `${found} — ${places.join(' ; ')}.`
+}

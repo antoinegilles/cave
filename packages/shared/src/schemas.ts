@@ -103,6 +103,8 @@ export const MAX_RACK_SLOTS = 10_000
 export const MAX_SLOT_NUMBER = 999_999
 /** Un ajout en lot reste volontairement borné pour protéger l'API et l'interface. */
 export const MAX_BOTTLES_PER_ADD = 100
+/** Même garde-fou pour une ouverture atomique : au-delà, le geste devient accidentogène. */
+export const MAX_BOTTLES_PER_DRINK = 100
 
 const rackShape = {
   name: z.string().min(1, 'Nom requis').max(60),
@@ -267,17 +269,38 @@ export type CreateBottleInput = z.infer<typeof createBottleSchema>
 
 export const updateBottleSchema = z.object({
   personalNote: z.string().max(2000).nullable().optional(),
+  personalRating: optionalNumber(z.number().min(1).max(5)).optional(),
   purchasePrice: optionalNumber(z.number().min(0).max(100000)).optional(),
   rackId: z.string().min(1).optional(),
   slotNumber: z.number().int().min(0).max(MAX_SLOT_NUMBER).optional(),
 })
 
 export const drinkBottleSchema = z.object({
-  personalRating: optionalNumber(z.number().min(0).max(5)).default(null),
+  personalRating: optionalNumber(z.number().min(1).max(5)).default(null),
   personalNote: z.string().max(2000).nullable().default(null),
   drunkAt: z.string().datetime().nullable().default(null),
 })
 export type DrinkBottleInput = z.infer<typeof drinkBottleSchema>
+
+export const drinkBottlesSchema = drinkBottleSchema
+  .extend({
+    bottleIds: z
+      .array(z.string().min(1, 'Identifiant de bouteille manquant.'))
+      .min(1, 'Sélectionne au moins une bouteille.')
+      .max(
+        MAX_BOTTLES_PER_DRINK,
+        `Tu peux ouvrir au maximum ${MAX_BOTTLES_PER_DRINK} bouteilles à la fois.`,
+      ),
+  })
+  .superRefine((data, ctx) => {
+    if (new Set(data.bottleIds).size === data.bottleIds.length) return
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['bottleIds'],
+      message: 'Une même bouteille ne peut être sélectionnée qu’une fois.',
+    })
+  })
+export type DrinkBottlesInput = z.infer<typeof drinkBottlesSchema>
 
 /* ---------------------------------------------------------------- search */
 
@@ -311,19 +334,37 @@ export const sommelierSchema = z.object({
   prompt: z
     .string()
     .trim()
-    .min(3, 'Décris un peu plus ton repas')
+    .min(3, 'Saisis au moins 3 caractères')
     .max(AI_PROMPT_MAX_LENGTH, `${AI_PROMPT_MAX_LENGTH} caractères maximum`),
 })
 export type SommelierInput = z.infer<typeof sommelierSchema>
 
+export const sommelierStatusSchema = z.object({
+  /** Flag fonctionnel, distinct de la présence de la clé Gemini. */
+  featureEnabled: z.boolean(),
+  configured: z.boolean(),
+  dailyQuota: z.number().int().min(0),
+  remaining: z.number().int().min(0),
+  maxPromptLength: z.number().int().positive(),
+})
+export type SommelierStatus = z.infer<typeof sommelierStatusSchema>
+
+export const sommelierLocationSchema = z.object({
+  bottleId: z.string(),
+  rackId: z.string().nullable(),
+  rackName: z.string().nullable(),
+  slotNumber: z.number().int().nullable(),
+})
+export type SommelierLocation = z.infer<typeof sommelierLocationSchema>
+
 export const sommelierResponseSchema = z.object({
   recommendations: z.array(
     z.object({
-      bottleId: z.string(),
-      slotNumber: z.number().int().nullable(),
-      rackName: z.string().nullable(),
+      wineId: z.string(),
+      representativeBottleId: z.string(),
       label: z.string(),
       reason: z.string(),
+      locations: z.array(sommelierLocationSchema),
     }),
   ),
   note: z.string().nullable(),

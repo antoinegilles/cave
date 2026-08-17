@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import {
+  ArrowDownTrayIcon,
+  ArrowPathIcon,
   ArrowRightStartOnRectangleIcon,
   ChartBarIcon,
   ClockIcon,
@@ -9,12 +11,17 @@ import {
   MagnifyingGlassIcon,
   MoonIcon,
   PlusIcon,
+  ShareIcon,
   SunIcon,
 } from '@heroicons/vue/24/outline'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, type Component } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
-import { usePrefsStore } from './stores/prefs'
+import BottomSheet from './components/BottomSheet.vue'
+import NotificationHost from './components/NotificationHost.vue'
 import { useAuthStore } from './stores/auth'
+import { useNotificationsStore } from './stores/notifications'
+import { usePrefsStore } from './stores/prefs'
+import { usePwaStore } from './stores/pwa'
 
 /**
  * Coque de l'application.
@@ -30,7 +37,9 @@ import { useAuthStore } from './stores/auth'
  */
 
 const auth = useAuthStore()
+const notifications = useNotificationsStore()
 const prefs = usePrefsStore()
+const pwa = usePwaStore()
 const route = useRoute()
 const router = useRouter()
 
@@ -77,6 +86,7 @@ const menuOpen = ref(false)
 const menuRef = ref<HTMLElement | null>(null)
 const menuButton = ref<HTMLButtonElement | null>(null)
 const menuPanel = ref<HTMLElement | null>(null)
+const iosInstallHelpOpen = ref(false)
 
 function onDocumentClick(event: MouseEvent): void {
   if (menuOpen.value && menuRef.value && !menuRef.value.contains(event.target as Node)) {
@@ -145,10 +155,32 @@ async function logout(): Promise<void> {
   await auth.logout()
   router.push({ name: 'login' })
 }
+
+async function installApplication(): Promise<void> {
+  menuOpen.value = false
+  if (pwa.needsIosInstructions) {
+    iosInstallHelpOpen.value = true
+    return
+  }
+  try {
+    await pwa.promptInstall()
+  } catch {
+    notifications.show("L'installation n'a pas pu être lancée. Réessaie depuis le navigateur.", 'error')
+  }
+}
+
+async function updateApplication(): Promise<void> {
+  try {
+    await pwa.applyUpdate()
+  } catch {
+    notifications.show("La mise à jour n'a pas pu être appliquée. Réessaie dans un instant.", 'error')
+  }
+}
 </script>
 
 <template>
   <div class="min-h-dvh bg-bg">
+    <NotificationHost />
     <a
       href="#contenu"
       class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-accent focus:px-4 focus:py-2 focus:text-accent-text"
@@ -237,6 +269,17 @@ async function logout(): Promise<void> {
                 {{ prefs.theme === 'dark' ? 'Utiliser le thème clair' : 'Utiliser le thème sombre' }}
               </button>
 
+              <button
+                v-if="pwa.canInstall"
+                type="button"
+                role="menuitem"
+                class="flex w-full items-center gap-3 px-4 py-3 text-left text-text transition-colors hover:bg-surface-hover"
+                @click="installApplication"
+              >
+                <ArrowDownTrayIcon class="h-5 w-5 text-muted" aria-hidden="true" />
+                Installer l'application
+              </button>
+
               <RouterLink
                 v-if="auth.isAdmin"
                 :to="{ name: 'admin' }"
@@ -260,6 +303,55 @@ async function logout(): Promise<void> {
         </div>
       </div>
     </header>
+
+    <div
+      v-if="!pwa.isOnline"
+      role="status"
+      aria-live="polite"
+      class="border-b border-warning bg-warning-soft px-4 py-2.5 text-center text-sm font-medium text-warning"
+    >
+      Hors connexion — les données affichées peuvent dater. Les actions réseau sont
+      indisponibles.
+    </div>
+
+    <div
+      v-if="pwa.registrationError"
+      role="alert"
+      class="border-b border-warning bg-warning-soft px-4 py-2.5 text-center text-sm font-medium text-warning"
+    >
+      Le mode hors connexion et les mises à jour automatiques sont indisponibles sur cet
+      appareil. L'application en ligne reste utilisable.
+    </div>
+
+    <div
+      v-if="pwa.updateAvailable"
+      role="status"
+      aria-live="polite"
+      class="border-b border-accent bg-accent-soft px-4 py-2.5 text-accent"
+    >
+      <div class="mx-auto flex max-w-5xl flex-wrap items-center justify-center gap-2 sm:justify-between">
+        <span class="text-sm font-medium">Une nouvelle version de Cave est disponible.</span>
+        <div class="flex items-center gap-2">
+          <button
+            type="button"
+            class="rounded-lg px-3 py-2 text-sm font-medium text-accent hover:bg-surface/70"
+            :disabled="pwa.updating"
+            @click="pwa.dismissUpdate"
+          >
+            Plus tard
+          </button>
+          <button
+            type="button"
+            class="flex items-center gap-2 rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-accent-text hover:bg-accent-hover disabled:opacity-60"
+            :disabled="pwa.updating"
+            @click="updateApplication"
+          >
+            <ArrowPathIcon class="h-4 w-4" aria-hidden="true" />
+            {{ pwa.updating ? 'Mise à jour…' : 'Mettre à jour' }}
+          </button>
+        </div>
+      </div>
+    </div>
 
     <main id="contenu" class="mx-auto max-w-5xl px-3 py-5 sm:px-4 sm:py-7" :class="showChrome ? 'pb-28 md:pb-10' : ''">
       <RouterView />
@@ -310,5 +402,36 @@ async function logout(): Promise<void> {
         </RouterLink>
       </div>
     </nav>
+
+    <BottomSheet
+      :open="iosInstallHelpOpen"
+      title="Installer Cave sur cet appareil"
+      @close="iosInstallHelpOpen = false"
+    >
+      <div class="space-y-4 text-text">
+        <p>
+          iOS et iPadOS installent l'application depuis le menu de partage du navigateur.
+        </p>
+        <ol class="space-y-3">
+          <li class="flex gap-3">
+            <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft font-semibold text-accent">1</span>
+            <span>Ouvre cette page dans Safari, puis touche <ShareIcon class="inline h-5 w-5" aria-hidden="true" /> <strong>Partager</strong>.</span>
+          </li>
+          <li class="flex gap-3">
+            <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft font-semibold text-accent">2</span>
+            <span>Choisis <strong>Sur l'écran d'accueil</strong>, puis confirme avec <strong>Ajouter</strong>.</span>
+          </li>
+        </ol>
+      </div>
+      <template #actions>
+        <button
+          type="button"
+          class="w-full rounded-xl bg-accent px-4 py-3 font-semibold text-accent-text hover:bg-accent-hover"
+          @click="iosInstallHelpOpen = false"
+        >
+          J'ai compris
+        </button>
+      </template>
+    </BottomSheet>
   </div>
 </template>

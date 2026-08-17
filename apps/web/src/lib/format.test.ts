@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { decimalFr, groupedSlotAnswer, joinFr, plural, slotAnswer } from './format.js'
+import {
+  decimalFr,
+  groupedBottleSlotAnswer,
+  groupedSlotAnswer,
+  joinFr,
+  plural,
+  slotAnswer,
+} from './format.js'
 
 describe('plural', () => {
   it('accorde au singulier et au pluriel', () => {
@@ -57,5 +64,38 @@ describe('groupedSlotAnswer', () => {
     ).toBe(
       '3 vins trouvés pour « rouge » — casier Cave : emplacements 3 et 12 ; casier Garage : emplacement 3.',
     )
+  })
+})
+
+describe('groupedBottleSlotAnswer', () => {
+  it('distingue les vins regroupés des bouteilles physiques', () => {
+    expect(
+      groupedBottleSlotAnswer(1, 3, 'Baptiste', [
+        { rackName: 'Cave', numbers: [15, 16, 17] },
+      ]),
+    ).toBe(
+      '1 vin trouvé · 3 bouteilles pour « Baptiste » — emplacements 15, 16 et 17.',
+    )
+  })
+
+  it('nomme les casiers quand les numéros sont ambigus', () => {
+    expect(
+      groupedBottleSlotAnswer(2, 3, 'rouge', [
+        { rackName: 'Cave', numbers: [3, 12] },
+        { rackName: 'Garage', numbers: [3] },
+      ]),
+    ).toContain('casier Cave : emplacements 3 et 12 ; casier Garage : emplacement 3')
+  })
+
+  it('nomme l’unique casier de résultat quand la cave en contient plusieurs', () => {
+    expect(
+      groupedBottleSlotAnswer(
+        1,
+        2,
+        'Baptiste',
+        [{ rackName: 'Garage', numbers: [15, 16] }],
+        true,
+      ),
+    ).toContain('casier Garage : emplacements 15 et 16')
   })
 })

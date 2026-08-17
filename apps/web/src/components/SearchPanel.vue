@@ -15,7 +15,7 @@ import { computed, onMounted, ref } from 'vue'
 import BottomSheet from './BottomSheet.vue'
 import SearchFilters from './SearchFilters.vue'
 import { ApiError, api } from '../lib/api'
-import { groupedSlotAnswer } from '../lib/format'
+import { groupedBottleSlotAnswer, plural } from '../lib/format'
 import { decideSearchMode } from '../lib/searchIntent'
 import { resolveRecommendationSlots } from '../lib/sommelierSlots'
 import { useHoverPointer } from '../lib/useMediaQuery'
@@ -30,8 +30,8 @@ import type { ListSort } from '../lib/bottleSort'
  * Un seul champ, deux moteurs, et surtout : l'utilisateur voit toujours lequel a répondu.
  *
  *  - La recherche SQL tourne à CHAQUE validation. Instantanée, gratuite, illimitée.
- *  - Le sommelier IA s'ajoute quand la phrase ressemble à une vraie question — jamais
- *    pendant la frappe, jamais sans quota. Voir `lib/searchIntent.ts`.
+ *  - Le sommelier IA s'ajoute à toute validation d'au moins 3 caractères admissible —
+ *    jamais pendant la frappe ou l'application d'un filtre. Voir `lib/searchIntent.ts`.
  *
  * Les résultats SQL restent affichés sous la réponse de l'IA : si celle-ci se trompe ou
  * échoue, l'utilisateur n'est jamais laissé devant un écran vide.
@@ -58,7 +58,6 @@ const aiResult = ref<SommelierResult | null>(null)
 const aiError = ref<string | null>(null)
 const sqlError = ref<string | null>(null)
 const lastMode = ref<'sql' | 'ai' | null>(null)
-const forceSql = ref(false)
 let interactionId = 0
 
 const SORTS: { key: ListSort; label: string }[] = [
@@ -69,6 +68,8 @@ const SORTS: { key: ListSort; label: string }[] = [
 ]
 
 const sommelier = ref<SommelierStatus | null>(null)
+const sommelierStatusError = ref(false)
+let sommelierStatusRequest: Promise<void> | null = null
 
 /** Le compteur du bouton oubliait la note et le profil : « Filtres · 2 » pour 4 filtres. */
 const activeFilterCount = computed(
@@ -81,26 +82,36 @@ const activeFilterCount = computed(
 
 const hasFilters = computed(() => activeFilterCount.value > 0)
 
-const aiAvailable = computed(() => Boolean(sommelier.value?.enabled))
 const quotaRemaining = computed(() => sommelier.value?.remaining ?? 0)
 
 /** Ce que ferait une validation maintenant — sert à annoncer le mode à l'avance. */
 const pendingDecision = computed(() =>
   decideSearchMode(query.value, {
     submitted: true,
-    aiAvailable: aiAvailable.value,
+    statusAvailable: sommelier.value !== null && !sommelierStatusError.value,
+    featureEnabled: sommelier.value?.featureEnabled ?? false,
+    configured: sommelier.value?.configured ?? false,
     quotaRemaining: quotaRemaining.value,
-    forceSql: forceSql.value,
   }),
 )
 
-onMounted(async () => {
+async function loadSommelierStatus(): Promise<void> {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), 8_000)
   try {
-    sommelier.value = await api.get<SommelierStatus>('/api/ai/sommelier/status')
+    sommelier.value = await api.get<SommelierStatus>('/api/ai/sommelier/status', controller.signal)
+    sommelierStatusError.value = false
   } catch {
     // Le sommelier est un supplément : son indisponibilité ne casse rien.
     sommelier.value = null
+    sommelierStatusError.value = true
+  } finally {
+    window.clearTimeout(timeout)
   }
+}
+
+onMounted(() => {
+  sommelierStatusRequest = loadSommelierStatus()
 })
 
 function clearFilters(refresh = false): void {
@@ -142,9 +153,9 @@ function goToSlot(rackId: string, number: number): void {
   cellar.focusSlot(rackId, number)
 }
 
-function searchLabel(): string {
+function searchLabel(prompt = query.value.trim()): string {
   return [
-    query.value.trim(),
+    prompt,
     ...selectedColors.value.map((c) => WINE_COLOR_LABELS[c as keyof typeof WINE_COLOR_LABELS]),
     ...selectedFoods.value.map((f) => FOOD_TAGS.find((t) => t.slug === f)?.labelFr ?? f),
     ...Object.keys(structureBounds.value).map(
@@ -157,27 +168,29 @@ function searchLabel(): string {
 }
 
 /** Recherche SQL — toujours exécutée, c'est le socle. */
-async function runSql(): Promise<boolean> {
+async function runSql(prompt = query.value.trim()): Promise<boolean> {
   const result = await cellar.search(
     {
-      q: query.value.trim() || undefined,
+      q: prompt || undefined,
       colors: selectedColors.value.length ? selectedColors.value : undefined,
       foodTags: selectedFoods.value.length ? selectedFoods.value : undefined,
       minRating: minRating.value ?? undefined,
       structure: Object.keys(structureBounds.value).length ? structureBounds.value : undefined,
       status: 'IN_CELLAR',
     },
-    searchLabel(),
+    searchLabel(prompt),
   )
   return cellar.searchResult === result
 }
 
-async function runAi(currentInteraction: number): Promise<void> {
+async function runAi(currentInteraction: number, submittedPrompt: string): Promise<void> {
   aiThinking.value = true
   aiError.value = null
   try {
     const result = await api.post<SommelierResult>('/api/ai/sommelier', {
-      prompt: query.value.trim(),
+      // Capture faite au clic/Entrée : une modification pendant la réponse SQL ne peut pas
+      // changer silencieusement la question réellement facturée au quota.
+      prompt: submittedPrompt,
     })
     if (currentInteraction !== interactionId) return
     aiResult.value = result
@@ -187,12 +200,14 @@ async function runAi(currentInteraction: number): Promise<void> {
     // chemin de rendu pour les deux moteurs. La résolution du casier est déléguée, car
     // le repli « sinon le casier actif » allumait le bon numéro sur le mauvais meuble.
     const keys = resolveRecommendationSlots(result.recommendations, cellar.racks)
-    if (keys.length > 0) cellar.applyHighlight(keys, query.value.trim())
+    if (keys.length > 0) cellar.applyHighlight(keys, submittedPrompt)
   } catch (e) {
     if (currentInteraction !== interactionId) return
     const error = e as ApiError
     aiError.value = error.message
     if (error.status === 429 && sommelier.value) sommelier.value.remaining = 0
+    if (error.status === 404 && sommelier.value) sommelier.value.featureEnabled = false
+    if (error.status === 503 && sommelier.value) sommelier.value.configured = false
   } finally {
     if (currentInteraction === interactionId) aiThinking.value = false
   }
@@ -209,7 +224,6 @@ async function refreshFromFilters(): Promise<void> {
   aiError.value = null
   sqlError.value = null
   lastMode.value = 'sql'
-  forceSql.value = false
 
   if (!query.value.trim() && !hasFilters.value) {
     cellar.clearSearch()
@@ -237,43 +251,40 @@ async function submit(): Promise<void> {
   }
 
   const currentInteraction = ++interactionId
+  const submittedPrompt = query.value.trim()
   searching.value = true
   aiResult.value = null
   aiError.value = null
   sqlError.value = null
 
-  const decision = decideSearchMode(query.value, {
-    submitted: true,
-    aiAvailable: aiAvailable.value,
-    quotaRemaining: quotaRemaining.value,
-    forceSql: forceSql.value,
-  })
-  lastMode.value = decision.mode
-
   try {
-    // Le SQL part en premier et sans attendre l'IA : l'utilisateur a une réponse
-    // affichée en quelques millisecondes, l'IA vient l'enrichir ensuite.
-    const applied = await runSql()
+    // Le SQL part immédiatement. L'état IA peut finir de se charger en parallèle, mais
+    // aucun appel Gemini ne démarre avant que la réponse classique ait été appliquée.
+    const applied = await runSql(submittedPrompt)
+    if (!sommelierStatusRequest || sommelierStatusError.value) {
+      sommelierStatusRequest = loadSommelierStatus()
+    }
+    if (sommelierStatusRequest) await sommelierStatusRequest
+    if (currentInteraction !== interactionId) return
+
+    const decision = decideSearchMode(submittedPrompt, {
+      submitted: true,
+      statusAvailable: sommelier.value !== null && !sommelierStatusError.value,
+      featureEnabled: sommelier.value?.featureEnabled ?? false,
+      configured: sommelier.value?.configured ?? false,
+      quotaRemaining: quotaRemaining.value,
+    })
+    lastMode.value = decision.mode
     if (applied && currentInteraction === interactionId && decision.mode === 'ai') {
-      await runAi(currentInteraction)
+      await runAi(currentInteraction, submittedPrompt)
     }
   } catch (error) {
     if (currentInteraction === interactionId) sqlError.value = (error as Error).message
   } finally {
     if (currentInteraction === interactionId) {
       searching.value = false
-      forceSql.value = false
     }
   }
-}
-
-/** Rejoue la même phrase en recherche classique, sans consommer de crédit. */
-async function retryWithoutAi(): Promise<void> {
-  forceSql.value = true
-  aiResult.value = null
-  aiError.value = null
-  sqlError.value = null
-  await submit()
 }
 
 function reset(): void {
@@ -288,29 +299,46 @@ function reset(): void {
 }
 
 const total = computed(() => cellar.searchResult?.total ?? 0)
+const uniqueWineTotal = computed(
+  () => new Set((cellar.searchResult?.bottles ?? []).map((bottle) => bottle.wine.id)).size,
+)
 
 /** Ce que le lecteur d'écran énonce après une recherche. */
 const announcement = computed(() =>
-  groupedSlotAnswer(
+  groupedBottleSlotAnswer(
+    uniqueWineTotal.value,
     total.value,
     cellar.searchLabel,
     cellar.matchedByRack.map((group) => ({
       rackName: group.rack.name,
       numbers: group.numbers,
     })),
+    cellar.racks.length > 1,
   ),
 )
 
+function firstRecommendationSlot(
+  recommendation: SommelierResult['recommendations'][number],
+): number | string {
+  return recommendation.locations.find((location) => location.slotNumber !== null)?.slotNumber ?? '–'
+}
+
 /** Ce que ferait une validation maintenant, en une ligne. */
 const modeHint = computed(() => {
+  if (sommelierStatusError.value) {
+    return 'Recherche classique — état du sommelier indisponible'
+  }
+  if (!sommelier.value) return 'Vérification du sommelier en cours…'
+  if (!sommelier.value.featureEnabled) return 'Recherche classique — sommelier désactivé'
+  if (!sommelier.value.configured) return 'Recherche classique — clé Gemini absente'
+  if (quotaRemaining.value <= 0) {
+    return 'Recherche classique — quota du sommelier épuisé pour aujourd’hui'
+  }
   if (!query.value.trim() || cellar.searchActive || searching.value) return null
   if (pendingDecision.value.mode === 'ai') {
-    return `Cette question sera envoyée au sommelier (${quotaRemaining.value} sur ${sommelier.value?.dailyQuota} restantes aujourd'hui)`
+    return `Validation : recherche classique puis sommelier (${quotaRemaining.value} sur ${sommelier.value.dailyQuota} restantes aujourd'hui)`
   }
-  if (pendingDecision.value.reason === 'no-quota') {
-    return 'Recherche instantanée — quota du sommelier épuisé pour aujourd’hui'
-  }
-  return 'Recherche instantanée dans ta cave'
+  return 'Recherche classique — saisis au moins 3 caractères pour interroger aussi le sommelier'
 })
 </script>
 
@@ -334,18 +362,18 @@ const modeHint = computed(() => {
         aria-label="Lancer la recherche"
         @click="submit"
       >
-        <MagnifyingGlassIcon class="h-5 w-5" :class="searching ? 'animate-pulse' : ''" aria-hidden="true" />
+        <MagnifyingGlassIcon class="h-5 w-5" :class="searching ? 'motion-safe:animate-pulse' : ''" aria-hidden="true" />
       </button>
     </div>
 
     <!-- Ligne d'état : annonce le mode AVANT validation, et porte le quota sur téléphone. -->
     <p
-      v-if="modeHint || sommelier?.enabled"
+      v-if="modeHint || sommelier"
       class="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-sm text-faint"
     >
       <span v-if="modeHint">{{ modeHint }}</span>
       <span
-        v-if="sommelier?.enabled"
+        v-if="sommelier?.featureEnabled && sommelier.configured"
         class="inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-sm font-semibold tabular-nums"
         :class="
           quotaRemaining > 0
@@ -451,18 +479,35 @@ const modeHint = computed(() => {
       <div class="space-y-3 p-4">
         <div
           v-for="rec in aiResult.recommendations"
-          :key="rec.bottleId"
+          :key="rec.wineId"
           class="flex gap-3 rounded-xl border border-line bg-surface-2 p-3"
         >
           <RouterLink
-            :to="{ name: 'bottle', params: { id: rec.bottleId } }"
+            :to="{ name: 'bottle', params: { id: rec.representativeBottleId } }"
             class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-accent text-lg font-bold text-accent-text"
+            :aria-label="`Ouvrir la fiche ${rec.label}`"
           >
-            {{ rec.slotNumber ?? '–' }}
+            {{ firstRecommendationSlot(rec) }}
           </RouterLink>
           <div class="min-w-0">
             <p class="font-semibold text-text">{{ rec.label }}</p>
             <p class="text-sm text-muted">{{ rec.reason }}</p>
+            <div class="mt-2 flex flex-wrap gap-1.5">
+              <template v-for="location in rec.locations" :key="location.bottleId">
+                <button
+                  v-if="location.rackId !== null && location.slotNumber !== null"
+                  type="button"
+                  class="min-h-9 rounded-lg border border-accent bg-accent-soft px-2.5 text-sm font-semibold text-accent"
+                  :aria-label="`Aller à l'emplacement ${location.slotNumber}${location.rackName ? ` du casier ${location.rackName}` : ''}`"
+                  @click="goToSlot(location.rackId, location.slotNumber)"
+                >
+                  {{ location.rackName ? `${location.rackName} · ` : '' }}{{ location.slotNumber }}
+                </button>
+                <span v-else class="rounded-lg border border-line px-2.5 py-1 text-sm text-faint">
+                  Sans emplacement
+                </span>
+              </template>
+            </div>
           </div>
         </div>
 
@@ -506,20 +551,13 @@ const modeHint = computed(() => {
         <p class="flex flex-wrap items-center gap-1.5 text-text">
           <SparklesIcon v-if="lastMode === 'ai'" class="h-5 w-5 text-accent" aria-hidden="true" />
           <MagnifyingGlassIcon v-else class="h-5 w-5 text-accent" aria-hidden="true" />
-          <strong class="font-display text-lg">{{ total }}</strong>
-          {{ total > 1 ? 'vins trouvés' : 'vin trouvé' }}
+          <strong class="font-display text-lg">{{ uniqueWineTotal }}</strong>
+          {{ uniqueWineTotal > 1 ? 'vins trouvés' : 'vin trouvé' }}
+          <span class="text-muted">· {{ plural(total, 'bouteille') }}</span>
           <span class="text-muted">pour « {{ cellar.searchLabel }} »</span>
         </p>
 
         <div class="flex items-center gap-3">
-          <button
-            v-if="lastMode === 'ai'"
-            type="button"
-            class="min-h-11 text-sm text-muted underline decoration-dotted hover:text-text"
-            @click="retryWithoutAi"
-          >
-            Chercher sans l'IA
-          </button>
           <button
             type="button"
             class="inline-flex min-h-11 items-center gap-1 text-sm font-medium text-accent hover:underline"
@@ -540,7 +578,7 @@ const modeHint = computed(() => {
             :key="number"
             type="button"
             class="min-h-11 min-w-11 rounded-xl border border-accent bg-accent-soft px-4 text-lg font-bold tabular-nums text-accent transition-colors hover:bg-accent hover:text-accent-text"
-            :aria-label="`Aller à l'emplacement ${number} sur le plan du casier`"
+            :aria-label="`Aller à l'emplacement ${number} du casier ${group.rack.name} sur le plan`"
             @click="goToSlot(group.rack.id, number)"
           >
             {{ number }}

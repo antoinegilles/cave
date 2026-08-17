@@ -1,4 +1,8 @@
-import type { WineStructure } from '@cave/shared'
+import type {
+  SommelierResponse,
+  SommelierStatus as SharedSommelierStatus,
+  WineStructure,
+} from '@cave/shared'
 
 /** Formes renvoyées par l'API — miroir de `services/serialize.ts` côté serveur. */
 
@@ -45,6 +49,25 @@ export interface BottleView {
   rackId: string | null
   rackName: string | null
   wine: WineView
+}
+
+export interface BottleDetailView {
+  bottle: BottleView
+  /** Tous les exemplaires encore présents qui partagent exactement le même `wine.id`. */
+  activeBottles: BottleView[]
+  drinkingWindow: { from: number; to: number } | null
+}
+
+export interface FreedSlotView {
+  bottleId: string
+  slotNumber: number
+  rackId: string
+  rackName: string
+}
+
+export interface DrinkBottlesResult {
+  bottles: BottleView[]
+  freedSlots: FreedSlotView[]
 }
 
 export interface SlotView {
@@ -94,25 +117,8 @@ export interface ResolveResult {
   providerStatus: ProviderStatus
 }
 
-export interface SommelierStatus {
-  enabled: boolean
-  configured: boolean
-  dailyQuota: number
-  remaining: number
-  maxPromptLength: number
-}
-
-export interface SommelierResult {
-  recommendations: {
-    bottleId: string
-    slotNumber: number | null
-    rackName: string | null
-    label: string
-    reason: string
-  }[]
-  note: string | null
-  quotaRemaining: number
-}
+export type SommelierStatus = SharedSommelierStatus
+export type SommelierResult = SommelierResponse
 
 export interface DrinkSoonEntry {
   bottle: BottleView

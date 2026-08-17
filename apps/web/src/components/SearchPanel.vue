@@ -167,9 +167,14 @@ function searchLabel(prompt = query.value.trim()): string {
     .join(' · ')
 }
 
-/** Recherche SQL — toujours exécutée, c'est le socle. */
+/**
+ * Recherche SQL — toujours exécutée, c'est le socle.
+ *
+ * Renvoie le drapeau du store : `false` seulement si une recherche plus récente a doublé
+ * celle-ci. C'est ce qui autorise ensuite l'appel au sommelier.
+ */
 async function runSql(prompt = query.value.trim()): Promise<boolean> {
-  const result = await cellar.search(
+  const { applied } = await cellar.search(
     {
       q: prompt || undefined,
       colors: selectedColors.value.length ? selectedColors.value : undefined,
@@ -180,7 +185,7 @@ async function runSql(prompt = query.value.trim()): Promise<boolean> {
     },
     searchLabel(prompt),
   )
-  return cellar.searchResult === result
+  return applied
 }
 
 async function runAi(currentInteraction: number, submittedPrompt: string): Promise<void> {

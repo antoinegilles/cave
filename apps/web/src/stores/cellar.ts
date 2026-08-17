@@ -65,16 +65,29 @@ export const useCellarStore = defineStore('cellar', () => {
     }
   }
 
-  async function search(body: Record<string, unknown>, label: string): Promise<SearchResult> {
+  /**
+   * `applied` dit si cette réponse a bien pris la main, ou si une recherche plus récente
+   * l'a doublée entre-temps.
+   *
+   * Le drapeau est explicite pour une raison précise : l'appelant ne peut pas le déduire en
+   * comparant `searchResult` à l'objet renvoyé. `searchResult` est un `ref` profond, donc sa
+   * lecture rend un **proxy réactif** — jamais l'objet brut qu'on vient d'y ranger. Cette
+   * égalité-là est toujours fausse, et elle a fait taire le sommelier : la recherche
+   * classique passait pour « doublée » à chaque fois, donc l'IA n'était jamais interrogée.
+   */
+  async function search(
+    body: Record<string, unknown>,
+    label: string,
+  ): Promise<{ result: SearchResult; applied: boolean }> {
     const request = ++searchRequest
     const result = await api.post<SearchResult>('/api/bottles/search', body)
-    if (request !== searchRequest) return result
+    if (request !== searchRequest) return { result, applied: false }
     applyHighlight(
       result.matchedSlots.map((s) => slotKey(s.rackId, s.slotNumber)),
       label,
     )
     searchResult.value = result
-    return result
+    return { result, applied: true }
   }
 
   /**

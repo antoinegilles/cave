@@ -35,7 +35,10 @@ const envSchema = z.object({
   VIVINO_MIN_INTERVAL_MS: z.coerce.number().int().default(2000),
 
   AI_SOMMELIER_ENABLED: boolEnv(true),
-  AI_DAILY_QUOTA: z.coerce.number().int().min(0).default(3),
+  // Le sommelier répond désormais à *chaque* recherche : un quota de 3 rendait l'app muette
+  // dès la quatrième question de la journée. 15 couvre un usage familial normal tout en
+  // bornant un emballement (boucle, onglet qui se rafraîchit).
+  AI_DAILY_QUOTA: z.coerce.number().int().min(0).default(15),
   AI_ENABLE_GROUNDING: boolEnv(false),
   /** Plafond de vins injectés dans le contexte du sommelier — borne la facture en tokens. */
   AI_MAX_CONTEXT_WINES: z.coerce.number().int().min(1).max(300).default(60),

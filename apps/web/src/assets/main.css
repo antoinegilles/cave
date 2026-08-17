@@ -245,6 +245,23 @@ textarea::placeholder {
   animation-delay: 0.3s;
 }
 
+/* Anneau qui tourne autour du verre pendant que le sommelier analyse la cave. */
+@keyframes sommelier-ring {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.sommelier-ring {
+  animation: sommelier-ring 1.6s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sommelier-ring {
+    animation: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .slot-highlight,
   .thinking-dot {

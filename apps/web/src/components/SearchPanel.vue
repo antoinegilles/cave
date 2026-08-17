@@ -323,6 +323,13 @@ function firstRecommendationSlot(
   return recommendation.locations.find((location) => location.slotNumber !== null)?.slotNumber ?? '–'
 }
 
+/** Ce que le sommelier est en train de faire, pendant que Gemini répond. */
+const thinkingDetail = computed(() => {
+  const total = cellar.totalBottles
+  if (total === 0) return 'Il regarde ta cave…'
+  return `Il passe en revue ${plural(total, 'bouteille')} pour te répondre.`
+})
+
 /** Ce que ferait une validation maintenant, en une ligne. */
 const modeHint = computed(() => {
   if (sommelierStatusError.value) {
@@ -332,11 +339,11 @@ const modeHint = computed(() => {
   if (!sommelier.value.featureEnabled) return 'Recherche classique — sommelier désactivé'
   if (!sommelier.value.configured) return 'Recherche classique — clé Gemini absente'
   if (quotaRemaining.value <= 0) {
-    return 'Recherche classique — quota du sommelier épuisé pour aujourd’hui'
+    return 'Le sommelier a fini sa journée — recherche classique jusqu’à demain'
   }
   if (!query.value.trim() || cellar.searchActive || searching.value) return null
   if (pendingDecision.value.mode === 'ai') {
-    return `Validation : recherche classique puis sommelier (${quotaRemaining.value} sur ${sommelier.value.dailyQuota} restantes aujourd'hui)`
+    return `Le sommelier analysera ta cave — ${plural(quotaRemaining.value, 'conseil')} restant${quotaRemaining.value > 1 ? 's' : ''} aujourd'hui`
   }
   return 'Recherche classique — saisis au moins 3 caractères pour interroger aussi le sommelier'
 })
@@ -446,19 +453,32 @@ const modeHint = computed(() => {
       {{ sqlError }}
     </p>
 
-    <!-- Le sommelier réfléchit -->
+    <!--
+      Le sommelier analyse. L'attente dure quelques secondes : on montre ce qu'il fait
+      vraiment (il relit toute la cave) plutôt qu'un spinner muet.
+    -->
     <div
       v-if="aiThinking"
-      class="flex items-center gap-3 rounded-xl border border-accent bg-accent-soft px-4 py-3"
+      class="flex items-center gap-4 rounded-xl border border-accent bg-accent-soft px-4 py-3.5"
       role="status"
       aria-live="polite"
     >
-      <SparklesIcon class="h-6 w-6 text-accent" aria-hidden="true" />
-      <span class="font-medium text-accent">Le sommelier réfléchit</span>
-      <span class="flex gap-1" aria-hidden="true">
-        <span class="thinking-dot h-2 w-2 rounded-full bg-accent" />
-        <span class="thinking-dot h-2 w-2 rounded-full bg-accent" />
-        <span class="thinking-dot h-2 w-2 rounded-full bg-accent" />
+      <span class="relative flex h-10 w-10 shrink-0 items-center justify-center" aria-hidden="true">
+        <span
+          class="sommelier-ring absolute inset-0 rounded-full border-2 border-accent/25 border-t-accent"
+        />
+        <SparklesIcon class="h-5 w-5 text-accent" />
+      </span>
+      <span class="min-w-0">
+        <span class="flex items-center gap-2 font-medium text-accent">
+          Analyse du sommelier en cours
+          <span class="flex gap-1">
+            <span class="thinking-dot h-1.5 w-1.5 rounded-full bg-accent" />
+            <span class="thinking-dot h-1.5 w-1.5 rounded-full bg-accent" />
+            <span class="thinking-dot h-1.5 w-1.5 rounded-full bg-accent" />
+          </span>
+        </span>
+        <span class="mt-0.5 block text-sm text-muted">{{ thinkingDetail }}</span>
       </span>
     </div>
 
@@ -472,7 +492,11 @@ const modeHint = computed(() => {
           <SparklesIcon class="h-5 w-5" aria-hidden="true" /> Réponse du sommelier
         </span>
         <span class="text-sm text-muted">
-          {{ aiResult.quotaRemaining }} sur {{ sommelier?.dailyQuota }} restantes
+          {{
+            aiResult.quotaRemaining > 0
+              ? `encore ${plural(aiResult.quotaRemaining, 'conseil')} aujourd'hui`
+              : 'dernier conseil du jour'
+          }}
         </span>
       </div>
 

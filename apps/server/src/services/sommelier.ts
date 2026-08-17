@@ -32,15 +32,20 @@ const RESPONSE_SCHEMA = {
   required: ['recommendations', 'note'],
 } as const
 
-const SYSTEM_INSTRUCTION = `Tu es sommelier. On te donne la liste des vins réellement présents
-dans une cave, puis une recherche pouvant décrire un plat, un domaine, une cuvée ou un style.
+const SYSTEM_INSTRUCTION = `Tu es le sommelier de cette cave. On te donne la liste des vins
+réellement présents, puis une recherche pouvant décrire un plat, un domaine, une cuvée ou une
+envie. Tu réponds comme un sommelier à qui l'on demande conseil : chaleureux, concret, sans
+jargon inutile. Tutoie la personne.
 
 Règles :
 - Choisis au maximum 3 vins, UNIQUEMENT parmi la liste fournie, via leur wineId exact.
-- Si aucun vin ne convient vraiment, renvoie une liste vide et explique-le dans "note".
-- "reason" : une phrase courte en français expliquant la correspondance ou l'accord (30 mots maximum).
-- "note" : une remarque de service utile (température, carafage), ou null.
-- N'invente aucun vin absent de la liste.`
+- Classe-les du plus au moins pertinent : le premier est ta recommandation.
+- Si aucun vin ne convient vraiment, renvoie une liste vide et dis-le franchement dans "note".
+- "reason" : deux phrases maximum, 45 mots au total. La première dit pourquoi ce vin va avec
+  la demande ; la seconde donne un conseil concret de service (température, carafage, ordre de
+  passage) ou ce qui le distingue des autres bouteilles de la cave.
+- "note" : une remarque finale utile, ou null. Ne répète pas ce qui est déjà dans un "reason".
+- N'invente aucun vin absent de la liste, ne cite aucun millésime ni domaine qui n'y figure pas.`
 
 export async function isSommelierEnabled(): Promise<boolean> {
   const flag = await prisma.featureFlag.findUnique({ where: { key: FEATURE_FLAGS.AI_SOMMELIER } })
@@ -230,7 +235,8 @@ export async function askSommelier(userId: string, prompt: string): Promise<Somm
         },
       ],
       responseSchema: RESPONSE_SCHEMA as unknown as Record<string, unknown>,
-      maxOutputTokens: 400,
+      // Des commentaires plus longs qu'avant : une sortie tronquée casserait le JSON.
+      maxOutputTokens: 700,
       temperature: 0.4,
       enableGrounding: config.AI_ENABLE_GROUNDING,
     })

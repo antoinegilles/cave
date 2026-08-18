@@ -43,6 +43,7 @@ const previewUrl = ref<string | null>(null)
 const wine = ref<WineView | null>(null)
 const rackId = ref<string>('')
 const selectedSlotNumbers = ref<number[]>([])
+const quantities = ref<Record<number, number>>({})
 const slotEntry = ref('')
 const slotEntryError = ref<string | null>(null)
 const rackChangeNotice = ref<string | null>(null)
@@ -65,7 +66,10 @@ onMounted(async () => {
 
   if (typeof querySlot === 'string') {
     const parsedSlot = Number(querySlot)
-    if (Number.isInteger(parsedSlot) && parsedSlot >= 0) selectedSlotNumbers.value = [parsedSlot]
+    if (Number.isInteger(parsedSlot) && parsedSlot >= 0) {
+      selectedSlotNumbers.value = [parsedSlot]
+      quantities.value[parsedSlot] = 1
+    }
   }
 })
 
@@ -86,7 +90,7 @@ const selectedSlotSet = computed(() => new Set(selectedSlotNumbers.value))
 const freeSlots = computed(() => {
   const rack = activeRack.value
   if (!rack) return []
-  return rack.slots.filter((slot) => !slot.bottle)
+  return rack.slots
 })
 
 const missingSlotNumbers = computed(() => {
@@ -96,12 +100,15 @@ const missingSlotNumbers = computed(() => {
   return selectedSlotNumbers.value.filter((number) => !existing.has(number))
 })
 
-const occupiedSlotNumbers = computed(() => {
-  const rack = activeRack.value
-  if (!rack) return []
-  const occupied = new Set(rack.slots.filter((slot) => slot.bottle).map((slot) => slot.number))
-  return selectedSlotNumbers.value.filter((number) => occupied.has(number))
-})
+const totalQuantity = computed(() =>
+  selectedSlotNumbers.value.reduce((sum, number) => sum + (quantities.value[number] ?? 1), 0),
+)
+const quantitiesValid = computed(() =>
+  selectedSlotNumbers.value.every((number) => {
+    const quantity = quantities.value[number]
+    return Number.isInteger(quantity) && quantity! >= 1 && quantity! <= MAX_BOTTLES_PER_ADD
+  }),
+)
 
 /**
  * Nombre de pastilles montrées d'emblée.
@@ -128,6 +135,7 @@ function toggleSlot(number: number): void {
 
   if (selectedSlotSet.value.has(number)) {
     selectedSlotNumbers.value = selectedSlotNumbers.value.filter((selected) => selected !== number)
+    delete quantities.value[number]
     return
   }
   if (selectedSlotNumbers.value.length >= MAX_BOTTLES_PER_ADD) {
@@ -136,10 +144,12 @@ function toggleSlot(number: number): void {
   }
 
   selectedSlotNumbers.value = [...selectedSlotNumbers.value, number].sort((a, b) => a - b)
+  quantities.value[number] = 1
 }
 
 function clearSlots(): void {
   selectedSlotNumbers.value = []
+  quantities.value = {}
   slotEntry.value = ''
   slotEntryError.value = null
 }
@@ -152,6 +162,7 @@ function applySlotEntry(): void {
   }
 
   selectedSlotNumbers.value = parsed.numbers
+  quantities.value = Object.fromEntries(parsed.numbers.map((number) => [number, 1]))
   slotEntry.value = ''
   slotEntryError.value = null
   rackChangeNotice.value = null
@@ -178,16 +189,16 @@ const canSubmit = computed(
     Boolean(wine.value.name?.trim()) &&
     rackId.value !== '' &&
     selectedSlotNumbers.value.length > 0 &&
-    selectedSlotNumbers.value.length <= MAX_BOTTLES_PER_ADD &&
+    quantitiesValid.value &&
+    totalQuantity.value <= MAX_BOTTLES_PER_ADD &&
     slotEntry.value.trim() === '' &&
     slotEntryError.value === null &&
-    missingSlotNumbers.value.length === 0 &&
-    occupiedSlotNumbers.value.length === 0,
+    missingSlotNumbers.value.length === 0,
 )
 
 const submitLabel = computed(() =>
-  selectedSlotNumbers.value.length > 1
-    ? `Ranger ${selectedSlotNumbers.value.length} bouteilles`
+  totalQuantity.value > 1
+    ? `Ranger ${totalQuantity.value} bouteilles`
     : 'Ranger dans la cave',
 )
 
@@ -313,18 +324,13 @@ async function submit(): Promise<void> {
 
   loading.value = true
   loadingLabel.value =
-    selectedSlotNumbers.value.length > 1
-      ? `Rangement de ${selectedSlotNumbers.value.length} bouteilles…`
+    totalQuantity.value > 1
+      ? `Rangement de ${totalQuantity.value} bouteilles…`
       : 'Rangement…'
   error.value = null
   fieldErrors.value = {}
 
   try {
-    const placement =
-      selectedSlotNumbers.value.length === 1
-        ? { slotNumber: selectedSlotNumbers.value[0] }
-        : { slotNumbers: [...selectedSlotNumbers.value] }
-
     await api.post('/api/bottles', {
       wine: {
         name: wine.value.name.trim(),
@@ -348,8 +354,11 @@ async function submit(): Promise<void> {
         foodTags: wine.value.foodTags.map((f) => f.slug),
         source: wine.value.source,
       },
-      rackId: rackId.value,
-      ...placement,
+      placements: selectedSlotNumbers.value.map((slotNumber) => ({
+        rackId: rackId.value,
+        slotNumber,
+        quantity: quantities.value[slotNumber] ?? 1,
+      })),
       personalNote: personalNote.value.trim() || null,
       purchasePrice: numberOrNull(purchasePrice.value),
     })
@@ -657,8 +666,8 @@ const inputClass =
         <div>
           <p class="text-lg font-semibold text-text">Choisis les emplacements *</p>
           <p class="mt-1 text-sm text-muted">
-            Une bouteille identique sera créée dans chaque emplacement sélectionné. Le prix et
-            la note personnelle seront appliqués à chaque exemplaire.
+            Choisis les emplacements et la quantité à ranger dans chacun. Un emplacement déjà
+            occupé peut recevoir d'autres bouteilles.
           </p>
         </div>
 
@@ -682,7 +691,7 @@ const inputClass =
         <div>
           <label for="slots" class="mb-1.5 block text-sm font-medium text-muted">
             Saisir des numéros ou des plages
-            <span class="text-faint">({{ freeSlots.length }} libres)</span>
+            <span class="text-faint">({{ freeSlots.length }} disponibles)</span>
           </label>
           <div class="flex gap-2">
             <input
@@ -722,20 +731,13 @@ const inputClass =
           <p v-if="missingSlotNumbers.length" role="alert" class="mt-1.5 text-sm text-danger">
             Emplacement(s) inexistant(s) dans ce casier : {{ missingSlotNumbers.join(', ') }}.
           </p>
-          <p v-if="occupiedSlotNumbers.length" role="alert" class="mt-1.5 text-sm text-danger">
-            Emplacement(s) déjà occupé(s) : {{ occupiedSlotNumbers.join(', ') }}.
-          </p>
         </div>
 
         <div v-if="selectedSlotNumbers.length" class="rounded-xl bg-surface-2 p-3">
           <div class="mb-2 flex items-center justify-between gap-3">
             <p class="font-medium text-text">
-              {{ selectedSlotNumbers.length }}
-              {{
-                selectedSlotNumbers.length > 1
-                  ? 'bouteilles sélectionnées'
-                  : 'bouteille sélectionnée'
-              }}
+              {{ totalQuantity }} bouteille{{ totalQuantity > 1 ? 's' : '' }} sur
+              {{ selectedSlotNumbers.length }} emplacement{{ selectedSlotNumbers.length > 1 ? 's' : '' }}
             </p>
             <button
               type="button"
@@ -745,28 +747,39 @@ const inputClass =
               Tout effacer
             </button>
           </div>
-          <div class="flex flex-wrap gap-2">
-            <button
+          <div class="space-y-2">
+            <div
               v-for="number in selectedSlotNumbers"
               :key="number"
-              type="button"
-              class="inline-flex min-h-10 items-center gap-1 rounded-full border px-3 font-medium tabular-nums"
-              :class="
-                missingSlotNumbers.includes(number) || occupiedSlotNumbers.includes(number)
-                  ? 'border-danger bg-danger-soft text-danger'
-                  : 'border-accent bg-accent-soft text-accent'
-              "
-              :aria-label="`Retirer l’emplacement ${number}`"
-              @click="toggleSlot(number)"
+              class="flex items-center gap-3 rounded-xl border border-accent bg-accent-soft p-2 text-accent"
             >
-              {{ number }}
-              <XMarkIcon class="h-4 w-4" aria-hidden="true" />
-            </button>
+              <span class="min-w-16 font-semibold tabular-nums">n° {{ number }}</span>
+              <label :for="`quantity-${number}`" class="text-sm">Quantité</label>
+              <input
+                :id="`quantity-${number}`"
+                v-model.number="quantities[number]"
+                type="number"
+                min="1"
+                :max="MAX_BOTTLES_PER_ADD"
+                class="h-10 w-20 rounded-lg border border-line bg-surface px-2 text-text"
+              />
+              <button
+                type="button"
+                class="ml-auto flex h-10 w-10 items-center justify-center rounded-lg hover:bg-danger-soft hover:text-danger"
+                :aria-label="`Retirer l’emplacement ${number}`"
+                @click="toggleSlot(number)"
+              >
+                <XMarkIcon class="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
           </div>
+          <p v-if="!quantitiesValid || totalQuantity > MAX_BOTTLES_PER_ADD" class="mt-2 text-sm text-danger">
+            Chaque quantité doit être positive, avec {{ MAX_BOTTLES_PER_ADD }} bouteilles maximum au total.
+          </p>
         </div>
 
         <p v-else class="rounded-xl bg-surface-2 px-4 py-3 text-sm text-muted">
-          Sélectionne au moins un emplacement libre.
+          Sélectionne au moins un emplacement.
         </p>
 
         <div class="flex flex-wrap gap-2">
@@ -799,7 +812,7 @@ const inputClass =
           class="min-h-11 w-full rounded-xl border border-line text-muted transition-colors hover:bg-surface-hover"
           @click="slotSheetOpen = true"
         >
-          Voir les {{ freeSlots.length }} emplacements libres
+          Voir les {{ freeSlots.length }} emplacements
         </button>
 
         <BottomSheet
@@ -808,7 +821,7 @@ const inputClass =
           @close="slotSheetOpen = false"
         >
           <p class="mb-3 text-sm text-faint">
-            {{ freeSlots.length }} emplacements libres dans « {{ activeRack?.name }} » ·
+            {{ freeSlots.length }} emplacements dans « {{ activeRack?.name }} » ·
             {{ selectedSlotNumbers.length }} sélectionné(s)
           </p>
           <p

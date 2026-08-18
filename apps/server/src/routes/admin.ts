@@ -2,6 +2,7 @@ import { FEATURE_FLAGS, createUserSchema } from '@cave/shared'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { config } from '../config.js'
+import { defaultCellarCreate } from '../lib/defaultCellar.js'
 import { hashPassword } from '../lib/password.js'
 import { prisma } from '../lib/prisma.js'
 import { vivinoBreaker } from '../providers/vivino.js'
@@ -28,15 +29,19 @@ export default async function adminRoutes(app: FastifyInstance) {
       return reply.code(409).send({ error: 'Cette adresse est déjà utilisée.' })
     }
 
-    const user = await prisma.user.create({
-      data: {
-        email,
-        name: parsed.data.name,
-        role: parsed.data.role,
-        passwordHash: await hashPassword(parsed.data.password),
-      },
-      select: { id: true, email: true, name: true, role: true },
-    })
+    const passwordHash = await hashPassword(parsed.data.password)
+    const user = await prisma.$transaction((tx) =>
+      tx.user.create({
+        data: {
+          email,
+          name: parsed.data.name,
+          role: parsed.data.role,
+          passwordHash,
+          racks: { create: defaultCellarCreate() },
+        },
+        select: { id: true, email: true, name: true, role: true },
+      }),
+    )
 
     return reply.code(201).send({ user })
   })
@@ -46,15 +51,6 @@ export default async function adminRoutes(app: FastifyInstance) {
 
     if (id === req.currentUser!.id) {
       return reply.code(400).send({ error: 'Tu ne peux pas supprimer ton propre compte.' })
-    }
-
-    // Les bouteilles référencent leur auteur (onDelete: Restrict) : supprimer le dernier
-    // admin ou un compte ayant rangé des bouteilles casserait l'historique.
-    const bottles = await prisma.bottle.count({ where: { addedById: id } })
-    if (bottles > 0) {
-      return reply.code(409).send({
-        error: `Ce compte a ajouté ${bottles} bouteille(s). Le supprimer effacerait l’historique.`,
-      })
     }
 
     await prisma.user.delete({ where: { id } })

@@ -96,9 +96,11 @@ describe('askSommelier — contexte et recommandations par Wine', () => {
     expect(mocks.findManyWines).toHaveBeenCalledWith(
       expect.objectContaining({
         take: 2,
-        where: { bottles: { some: { status: 'IN_CELLAR' } } },
+        where: { bottles: { some: { status: 'IN_CELLAR', ownerId: 'user-1' } } },
         include: expect.objectContaining({
-          bottles: expect.objectContaining({ where: { status: 'IN_CELLAR' } }),
+          bottles: expect.objectContaining({
+            where: { status: 'IN_CELLAR', ownerId: 'user-1' },
+          }),
         }),
       }),
     )

@@ -6,6 +6,7 @@ import {
   CELL,
   formatSlotLabel,
   rackLayout,
+  rowLabel,
   rowTopPercent,
   scrollLeftFor,
   slotX,
@@ -121,7 +122,7 @@ const visibleSlots = computed(() => {
 })
 
 function bottleColor(slot: SlotView): string {
-  const color = slot.bottle?.wine.color as WineColor | null | undefined
+  const color = slot.bottles[0]?.wine.color as WineColor | null | undefined
   return color ? WINE_COLOR_HEX[color] : 'var(--text-faint)'
 }
 
@@ -153,13 +154,13 @@ const hovered = ref<SlotView | null>(null)
 
 function onActivate(slot: SlotView): void {
   if (isInert(slot)) return
-  if (slot.bottle) emit('selectBottle', slot)
+  if (slot.bottles.length > 0) emit('selectBottle', slot)
   else emit('selectEmpty', slot)
 }
 
 /** Repères de rangée (A, B, C…), convention des casiers du commerce. */
 const rowLabels = computed(() =>
-  Array.from({ length: props.rack.rows }, (_, i) => String.fromCharCode(65 + i)),
+  Array.from({ length: props.rack.rows }, (_, index) => rowLabel(index)),
 )
 
 /** Amène une alvéole au centre du défileur. */
@@ -192,8 +193,9 @@ watch(
 
 const tooltip = computed(() => {
   const slot = hovered.value
-  if (!slot?.bottle) return null
-  const wine = slot.bottle.wine
+  const bottle = slot?.bottles[0]
+  if (!bottle) return null
+  const wine = bottle.wine
   return {
     title: wine.name,
     producer: wine.producer,
@@ -262,8 +264,8 @@ const tooltip = computed(() => {
             :tabindex="isInert(slot) ? undefined : 0"
             :aria-hidden="isInert(slot) || undefined"
             :aria-label="
-              slot.bottle
-                ? `Emplacement ${slot.number} : ${slot.bottle.wine.name}`
+              slot.bottles.length > 0
+                ? `Emplacement ${slot.number} : ${slot.bottles.length} bouteille${slot.bottles.length > 1 ? 's' : ''}`
                 : `Emplacement ${slot.number}, libre`
             "
             @click="onActivate(slot)"
@@ -280,16 +282,16 @@ const tooltip = computed(() => {
               :width="CELL"
               :height="CELL"
               rx="10"
-              :fill="slot.bottle ? 'var(--surface)' : 'transparent'"
+              :fill="slot.bottles.length > 0 ? 'var(--surface)' : 'transparent'"
               :stroke="isHighlighted(slot) ? 'var(--accent)' : 'var(--line)'"
               :stroke-width="isHighlighted(slot) ? 4 : 1.5"
-              :stroke-dasharray="slot.bottle ? '0' : '5 4'"
+              :stroke-dasharray="slot.bottles.length > 0 ? '0' : '5 4'"
               :filter="isHighlighted(slot) ? `url(#${glowId})` : undefined"
               :class="isHighlighted(slot) ? 'slot-highlight' : ''"
             />
 
             <!-- Bouteille couchée vue de profil : goulot à gauche, culot à droite. -->
-            <g v-if="slot.bottle">
+            <g v-if="slot.bottles.length > 0">
               <rect
                 :x="slotX(slot.col) + 14"
                 :y="slotY(slot.row, rack.rows) + 34"
@@ -319,6 +321,25 @@ const tooltip = computed(() => {
               />
             </g>
 
+            <g v-if="slot.bottles.length > 1" aria-hidden="true">
+              <circle
+                :cx="slotX(slot.col) + CELL - 16"
+                :cy="slotY(slot.row, rack.rows) + 16"
+                r="13"
+                fill="var(--accent)"
+              />
+              <text
+                :x="slotX(slot.col) + CELL - 16"
+                :y="slotY(slot.row, rack.rows) + 21"
+                text-anchor="middle"
+                font-size="13"
+                font-weight="700"
+                fill="var(--accent-text)"
+              >
+                {{ slot.bottles.length }}
+              </text>
+            </g>
+
             <text
               :x="slotX(slot.col) + CELL / 2"
               :y="slotY(slot.row, rack.rows) + CELL - 12"
@@ -328,7 +349,7 @@ const tooltip = computed(() => {
               :fill="
                 isHighlighted(slot)
                   ? 'var(--accent)'
-                  : slot.bottle
+                  : slot.bottles.length > 0
                     ? 'var(--text)'
                     : 'var(--text-muted)'
               "

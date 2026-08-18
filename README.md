@@ -4,6 +4,9 @@ Cave à vin virtuelle auto-hébergée. Chaque bouteille est rangée à un **empl
 qui correspond à celui inscrit physiquement sur le casier — et quand on cherche un vin pour un
 repas, **les emplacements correspondants s'allument** dans le plan du casier.
 
+Chaque compte possède sa cave privée et ses propres casiers. Un administrateur peut consulter
+la cave d'un autre compte depuis l'interface réelle, mais toujours en lecture seule.
+
 Construit pour remplacer la fonctionnalité « cave » de Vivino, devenue payante.
 
 ---
@@ -17,6 +20,9 @@ profil gustatif). On corrige si besoin, on saisit le numéro d'emplacement, c'es
 Deux autres voies si la photo échoue : **code-barres** de la contre-étiquette, ou **recherche
 par nom**. Et toujours la saisie manuelle. Aucune voie n'est bloquante.
 
+Un emplacement peut contenir plusieurs bouteilles, identiques ou différentes. La fiche d'un
+vin regroupe tous ses exemplaires et permet d'en ajouter, déplacer ou supprimer un à un.
+
 **Retrouver une bouteille** — On tape `poisson`, `agneau`, `huitres`, une région, un domaine.
 Les emplacements correspondants s'illuminent dans le casier, les autres s'estompent. On lit le
 numéro, on va chercher la bouteille. Filtres complémentaires : couleur, note Vivino minimale,
@@ -26,9 +32,13 @@ profil marqué (tannique, acide, sucré, intense).
 (« gigot d'agneau aux herbes pour six »), l'IA choisit parmi les vins **réellement en cave** et
 allume leurs emplacements. Limité à 3 requêtes par jour et par personne.
 
-**Après la dégustation** — L'emplacement se libère, la bouteille rejoint l'historique avec la
-date, une note personnelle et un commentaire. La page « à ouvrir bientôt » signale les vins
-dont la fenêtre de dégustation se referme.
+**Après la dégustation** — La bouteille quitte son emplacement, qui redevient libre après le
+dernier exemplaire, puis rejoint l'historique avec la date, une note personnelle et un
+commentaire. La page « à ouvrir bientôt » signale les vins dont la fenêtre se referme.
+
+**Installation** — Quand le navigateur le permet, l'application propose automatiquement son
+installation. Sur iPhone et iPad, elle explique le passage par « Partager → Sur l'écran
+d'accueil ». L'API reste exclusivement réseau : aucune donnée de cave périmée n'est cachée.
 
 ---
 

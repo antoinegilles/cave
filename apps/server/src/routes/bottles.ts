@@ -1,12 +1,15 @@
 import {
+  addBottleCopiesSchema,
   createBottleSchema,
   drinkBottleSchema,
   drinkBottlesSchema,
   searchSchema,
   updateBottleSchema,
 } from '@cave/shared'
-import type { DrinkBottleInput } from '@cave/shared'
+import type { BottlePlacementInput, DrinkBottleInput } from '@cave/shared'
+import type { Prisma } from '@prisma/client'
 import type { FastifyInstance } from 'fastify'
+import { resolveCellarOwner } from '../lib/ownership.js'
 import { prisma } from '../lib/prisma.js'
 import { enrichWineData } from '../providers/heuristics.js'
 import { searchBottles } from '../services/search.js'
@@ -16,7 +19,6 @@ import { drinkingWindow, upsertWine } from '../services/wines.js'
 class BottlePlacementError extends Error {
   constructor(
     readonly missingSlotNumbers: number[],
-    readonly occupiedSlotNumbers: number[],
   ) {
     super('Emplacements indisponibles')
     this.name = 'BottlePlacementError'
@@ -36,6 +38,66 @@ class BottleDrinkConflictError extends Error {
 export default async function bottleRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate)
 
+  async function createPhysicalBottles(
+    tx: Prisma.TransactionClient,
+    ownerId: string,
+    wineId: string,
+    placements: BottlePlacementInput[],
+    details: {
+      personalNote?: string | null
+      purchasePrice?: number | null
+      labelPhotoPath?: string | null
+    } = {},
+  ) {
+    const slots = await tx.slot.findMany({
+      where: {
+        OR: placements.map((placement) => ({
+          rackId: placement.rackId,
+          number: placement.slotNumber,
+        })),
+        rack: { ownerId },
+      },
+    })
+    const key = (rackId: string, number: number) => `${rackId}:${number}`
+    const slotsByPosition = new Map(slots.map((slot) => [key(slot.rackId, slot.number), slot]))
+    const missing = placements.filter(
+      (placement) => !slotsByPosition.has(key(placement.rackId, placement.slotNumber)),
+    )
+    if (missing.length > 0) {
+      throw new BottlePlacementError(missing.map((placement) => placement.slotNumber))
+    }
+
+    const ids: string[] = []
+    for (const placement of placements) {
+      const slot = slotsByPosition.get(key(placement.rackId, placement.slotNumber))!
+      for (let index = 0; index < placement.quantity; index++) {
+        const bottle = await tx.bottle.create({
+          data: {
+            wineId,
+            slotId: slot.id,
+            ownerId,
+            status: 'IN_CELLAR',
+            personalNote: details.personalNote,
+            purchasePrice: details.purchasePrice,
+            labelPhotoPath: details.labelPhotoPath,
+          },
+          select: { id: true },
+        })
+        ids.push(bottle.id)
+      }
+    }
+
+    const created = await tx.bottle.findMany({
+      where: { id: { in: ids }, ownerId },
+      include: {
+        wine: { include: { foodTags: { include: { foodTag: true } } } },
+        slot: { include: { rack: true } },
+      },
+    })
+    const byId = new Map(created.map((bottle) => [bottle.id, bottle]))
+    return ids.map((id) => serializeBottle(byId.get(id)!))
+  }
+
   /**
    * Ouvre un ou plusieurs exemplaires dans une seule transaction.
    *
@@ -43,10 +105,14 @@ export default async function bottleRoutes(app: FastifyInstance) {
    * Le contrôle du nombre de lignes modifiées couvre le conflit concurrent entre la lecture
    * et l'écriture : lever après l'écriture force Prisma à annuler toute la transaction.
    */
-  async function drinkBottles(bottleIds: string[], tasting: DrinkBottleInput) {
+  async function drinkBottles(
+    ownerId: string,
+    bottleIds: string[],
+    tasting: DrinkBottleInput,
+  ) {
     return prisma.$transaction(async (tx) => {
       const bottles = await tx.bottle.findMany({
-        where: { id: { in: bottleIds } },
+        where: { id: { in: bottleIds }, ownerId },
         include: {
           wine: { include: { foodTags: { include: { foodTag: true } } } },
           slot: { include: { rack: true } },
@@ -75,7 +141,8 @@ export default async function bottleRoutes(app: FastifyInstance) {
       }
 
       const wineId = orderedBottles[0]!.wineId
-      const freedSlots = orderedBottles.map((bottle) => ({
+      const candidateSlots = orderedBottles.map((bottle) => ({
+        slotId: bottle.slot!.id,
         bottleId: bottle.id,
         slotNumber: bottle.slot!.number,
         rackId: bottle.slot!.rackId,
@@ -86,6 +153,7 @@ export default async function bottleRoutes(app: FastifyInstance) {
           OR: orderedBottles.map((bottle) => ({ id: bottle.id, slotId: bottle.slotId })),
           status: 'IN_CELLAR',
           wineId,
+          ownerId,
         },
         data: {
           status: 'DRUNK',
@@ -99,8 +167,35 @@ export default async function bottleRoutes(app: FastifyInstance) {
         throw new BottleDrinkConflictError(bottleIds)
       }
 
+      const stillOccupied = new Set(
+        (
+          await tx.bottle.findMany({
+            where: {
+              status: 'IN_CELLAR',
+              slotId: { in: [...new Set(candidateSlots.map((slot) => slot.slotId))] },
+            },
+            select: { slotId: true },
+          })
+        ).flatMap((remaining) => (remaining.slotId ? [remaining.slotId] : [])),
+      )
+      const freedSlots = [
+        ...new Map(
+          candidateSlots
+            .filter((slot) => !stillOccupied.has(slot.slotId))
+            .map((slot) => [
+              slot.slotId,
+              {
+                bottleId: slot.bottleId,
+                slotNumber: slot.slotNumber,
+                rackId: slot.rackId,
+                rackName: slot.rackName,
+              },
+            ]),
+        ).values(),
+      ]
+
       const updated = await tx.bottle.findMany({
-        where: { id: { in: bottleIds } },
+        where: { id: { in: bottleIds }, ownerId },
         include: {
           wine: { include: { foodTags: { include: { foodTag: true } } } },
           slot: { include: { rack: true } },
@@ -119,7 +214,7 @@ export default async function bottleRoutes(app: FastifyInstance) {
     if (!parsed.success) {
       return reply.code(400).send({ error: 'Requête invalide', issues: parsed.error.issues })
     }
-    return searchBottles(parsed.data)
+    return searchBottles(parsed.data, await resolveCellarOwner(req))
   })
 
   app.post('/', async (req, reply) => {
@@ -127,85 +222,41 @@ export default async function bottleRoutes(app: FastifyInstance) {
     if (!parsed.success) {
       return reply.code(400).send({ error: 'Requête invalide', issues: parsed.error.issues })
     }
-    const { wine, rackId, personalNote, purchasePrice, labelPhotoPath } = parsed.data
-    const requestedNumbers = parsed.data.slotNumbers ?? [parsed.data.slotNumber!]
+    const { wine, personalNote, purchasePrice, labelPhotoPath } = parsed.data
+    const placements = parsed.data.placements ??
+      (parsed.data.slotNumbers ?? [parsed.data.slotNumber!]).map((slotNumber) => ({
+        rackId: parsed.data.rackId!,
+        slotNumber,
+        quantity: 1,
+      }))
 
-    const result = await prisma.$transaction(async (tx) => {
-      const slots = await tx.slot.findMany({
-        where: { rackId, number: { in: requestedNumbers } },
-        include: { bottles: { where: { status: 'IN_CELLAR' } } },
-      })
-      const slotsByNumber = new Map(slots.map((slot) => [slot.number, slot]))
-      const missingSlotNumbers = requestedNumbers.filter((number) => !slotsByNumber.has(number))
-      const occupiedSlotNumbers = requestedNumbers.filter(
-        (number) => (slotsByNumber.get(number)?.bottles.length ?? 0) > 0,
-      )
-
-      // Lever une erreur dans la transaction garantit qu'aucun exemplaire — et aucune
-      // mise à jour de la fiche vin — ne subsiste si un seul emplacement pose problème.
-      if (missingSlotNumbers.length > 0 || occupiedSlotNumbers.length > 0) {
-        throw new BottlePlacementError(missingSlotNumbers, occupiedSlotNumbers)
-      }
-
-      const wineId = await upsertWine(enrichWineData(wine), tx)
-      await tx.bottle.createMany({
-        data: requestedNumbers.map((slotNumber) => ({
-          wineId,
-          slotId: slotsByNumber.get(slotNumber)!.id,
-          status: 'IN_CELLAR',
-          addedById: req.currentUser!.id,
+    const result = await prisma
+      .$transaction(async (tx) => {
+        const wineId = await upsertWine(enrichWineData(wine), tx)
+        return createPhysicalBottles(tx, req.currentUser!.id, wineId, placements, {
           personalNote,
           purchasePrice,
           labelPhotoPath,
-        })),
+        })
       })
-
-      const createdBottles = await tx.bottle.findMany({
-        where: { slotId: { in: slots.map((slot) => slot.id) }, status: 'IN_CELLAR' },
-        include: {
-          wine: { include: { foodTags: { include: { foodTag: true } } } },
-          slot: { include: { rack: true } },
-        },
+      .catch((error: unknown) => {
+        if (error instanceof BottlePlacementError) return error
+        throw error
       })
-      if (createdBottles.length !== requestedNumbers.length) {
-        throw new Error('Le lot créé est incomplet, la transaction doit être annulée.')
-      }
-      const bottlesBySlotId = new Map(
-        createdBottles.map((bottle) => [bottle.slotId, serializeBottle(bottle)]),
-      )
-
-      return requestedNumbers.map(
-        (slotNumber) => bottlesBySlotId.get(slotsByNumber.get(slotNumber)!.id)!,
-      )
-    }).catch((error: unknown) => {
-      if (error instanceof BottlePlacementError) return error
-      throw error
-    })
 
     if (result instanceof BottlePlacementError) {
-      const affected = requestedNumbers.filter(
-        (number) =>
-          result.missingSlotNumbers.includes(number) ||
-          result.occupiedSlotNumbers.includes(number),
-      )
+      const affected = result.missingSlotNumbers
       const singular = affected.length === 1
-      const missingMessage = result.missingSlotNumbers.length
-        ? result.missingSlotNumbers.length === 1
-          ? `L’emplacement ${result.missingSlotNumbers[0]} n’existe pas dans ce casier.`
-          : `Les emplacements ${result.missingSlotNumbers.join(', ')} n’existent pas dans ce casier.`
-        : ''
-      const occupiedMessage = result.occupiedSlotNumbers.length
-        ? result.occupiedSlotNumbers.length === 1
-          ? `L’emplacement ${result.occupiedSlotNumbers[0]} est déjà occupé.`
-          : `Les emplacements ${result.occupiedSlotNumbers.join(', ')} sont déjà occupés.`
-        : ''
+      const missingMessage = singular
+        ? `L’emplacement ${affected[0]} n’existe pas dans ce casier.`
+        : `Les emplacements ${affected.join(', ')} n’existent pas dans ces casiers.`
 
-      return reply.code(result.missingSlotNumbers.length > 0 ? 400 : 409).send({
-        error: [missingMessage, occupiedMessage].filter(Boolean).join(' '),
+      return reply.code(404).send({
+        error: missingMessage,
         ...(singular ? { slotNumber: affected[0] } : {}),
         slotNumbers: affected,
         missingSlotNumbers: result.missingSlotNumbers,
-        occupiedSlotNumbers: result.occupiedSlotNumbers,
+        occupiedSlotNumbers: [],
       })
     }
 
@@ -221,9 +272,12 @@ export default async function bottleRoutes(app: FastifyInstance) {
     const { bottleIds, ...tasting } = parsed.data
 
     try {
-      return await drinkBottles(bottleIds, tasting)
+      return await drinkBottles(req.currentUser!.id, bottleIds, tasting)
     } catch (error) {
       if (!(error instanceof BottleDrinkConflictError)) throw error
+      if (error.missingBottleIds.length > 0) {
+        return reply.code(404).send({ error: 'Bouteille introuvable' })
+      }
       return reply.code(409).send({
         error: error.message,
         bottleIds,
@@ -232,10 +286,50 @@ export default async function bottleRoutes(app: FastifyInstance) {
     }
   })
 
+  /** Ajoute des exemplaires depuis une fiche déjà détenue, sans solliciter de provider. */
+  app.post('/:id/copies', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const parsed = addBottleCopiesSchema.safeParse(req.body)
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'Requête invalide', issues: parsed.error.issues })
+    }
+
+    const source = await prisma.bottle.findFirst({
+      where: { id, ownerId: req.currentUser!.id },
+      select: {
+        wineId: true,
+        personalNote: true,
+        purchasePrice: true,
+        labelPhotoPath: true,
+      },
+    })
+    if (!source) return reply.code(404).send({ error: 'Bouteille introuvable' })
+
+    try {
+      const bottles = await prisma.$transaction((tx) =>
+        createPhysicalBottles(
+          tx,
+          req.currentUser!.id,
+          source.wineId,
+          parsed.data.placements,
+          source,
+        ),
+      )
+      return reply.code(201).send({ bottle: bottles[0], bottles })
+    } catch (error) {
+      if (!(error instanceof BottlePlacementError)) throw error
+      return reply.code(404).send({
+        error: `Emplacement(s) introuvable(s) : ${error.missingSlotNumbers.join(', ')}.`,
+        missingSlotNumbers: error.missingSlotNumbers,
+      })
+    }
+  })
+
   app.get('/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
-    const bottle = await prisma.bottle.findUnique({
-      where: { id },
+    const ownerId = await resolveCellarOwner(req)
+    const bottle = await prisma.bottle.findFirst({
+      where: { id, ownerId },
       include: {
         wine: { include: { foodTags: { include: { foodTag: true } } } },
         slot: { include: { rack: true } },
@@ -244,7 +338,7 @@ export default async function bottleRoutes(app: FastifyInstance) {
     if (!bottle) return reply.code(404).send({ error: 'Bouteille introuvable' })
 
     const activeBottles = await prisma.bottle.findMany({
-      where: { wineId: bottle.wineId, status: 'IN_CELLAR' },
+      where: { wineId: bottle.wineId, status: 'IN_CELLAR', ownerId },
       include: {
         wine: { include: { foodTags: { include: { foodTag: true } } } },
         slot: { include: { rack: true } },
@@ -279,7 +373,11 @@ export default async function bottleRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Requête invalide', issues: parsed.error.issues })
     }
 
-    const bottle = await prisma.bottle.findUnique({ where: { id }, include: { slot: true } })
+    const ownerId = req.currentUser!.id
+    const bottle = await prisma.bottle.findFirst({
+      where: { id, ownerId },
+      include: { slot: true },
+    })
     if (!bottle) return reply.code(404).send({ error: 'Bouteille introuvable' })
 
     if (parsed.data.personalRating !== undefined && bottle.status !== 'DRUNK') {
@@ -290,7 +388,7 @@ export default async function bottleRoutes(app: FastifyInstance) {
 
     let slotId = bottle.slotId
 
-    // Déplacement vers un autre emplacement : il doit exister et être libre.
+    // Déplacement vers un autre emplacement de la même cave, occupé ou non.
     if (parsed.data.slotNumber != null || parsed.data.rackId) {
       const rackId = parsed.data.rackId ?? bottle.slot?.rackId
       const number = parsed.data.slotNumber ?? bottle.slot?.number
@@ -298,14 +396,10 @@ export default async function bottleRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'Casier ou emplacement manquant' })
       }
 
-      const target = await prisma.slot.findUnique({
-        where: { rackId_number: { rackId, number } },
-        include: { bottles: { where: { status: 'IN_CELLAR', NOT: { id } } } },
+      const target = await prisma.slot.findFirst({
+        where: { rackId, number, rack: { ownerId } },
       })
-      if (!target) return reply.code(400).send({ error: `L’emplacement ${number} n’existe pas.` })
-      if (target.bottles.length > 0) {
-        return reply.code(409).send({ error: `L’emplacement ${number} est déjà occupé.` })
-      }
+      if (!target) return reply.code(404).send({ error: 'Emplacement introuvable' })
       slotId = target.id
     }
 
@@ -339,7 +433,7 @@ export default async function bottleRoutes(app: FastifyInstance) {
     }
 
     try {
-      const result = await drinkBottles([id], parsed.data)
+      const result = await drinkBottles(req.currentUser!.id, [id], parsed.data)
       return { bottle: result.bottles[0] }
     } catch (error) {
       if (!(error instanceof BottleDrinkConflictError)) throw error
@@ -352,7 +446,9 @@ export default async function bottleRoutes(app: FastifyInstance) {
 
   app.delete('/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
-    const bottle = await prisma.bottle.findUnique({ where: { id } })
+    const bottle = await prisma.bottle.findFirst({
+      where: { id, ownerId: req.currentUser!.id },
+    })
     if (!bottle) return reply.code(404).send({ error: 'Bouteille introuvable' })
 
     await prisma.bottle.delete({ where: { id } })

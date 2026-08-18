@@ -15,6 +15,7 @@ interface PwaCallbacks {
 function browserEnvironment() {
   const listeners = new Map<string, (event: Event) => void>()
   const displayListeners: Array<() => void> = []
+  const stored = new Map<string, string>()
   vi.stubGlobal('navigator', {
     onLine: true,
     userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
@@ -34,6 +35,11 @@ function browserEnvironment() {
         displayListeners.push(listener)
       }),
     })),
+    localStorage: {
+      getItem: vi.fn((key: string) => stored.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => stored.set(key, value)),
+      removeItem: vi.fn((key: string) => stored.delete(key)),
+    },
   })
   return { listeners, displayListeners }
 }
@@ -80,8 +86,25 @@ describe('store PWA', () => {
     } as unknown as Event
     listeners.get('beforeinstallprompt')?.(installEvent)
 
+    expect(pwa.installOfferVisible).toBe(true)
     await expect(pwa.promptInstall()).rejects.toThrow('prompt indisponible')
     expect(pwa.canInstall).toBe(true)
+  })
+
+  it('reporte pendant sept jours une proposition fermée', () => {
+    const { listeners } = browserEnvironment()
+    mocks.registerSW.mockReturnValue(vi.fn())
+    const pwa = usePwaStore()
+    pwa.initialize()
+    listeners.get('beforeinstallprompt')?.({ preventDefault: vi.fn() } as unknown as Event)
+
+    pwa.dismissInstallOffer()
+
+    expect(pwa.installOfferVisible).toBe(false)
+    expect(window.localStorage.setItem).toHaveBeenCalledWith(
+      'cave-install-reminder-at',
+      expect.any(String),
+    )
   })
 
   it('conserve la bannière de mise à jour après un échec et libère le bouton', async () => {
@@ -112,5 +135,23 @@ describe('store PWA', () => {
     expect(() => pwa.initialize()).not.toThrow()
     expect(pwa.registrationError).toBe(true)
     consoleError.mockRestore()
+  })
+
+  it('reste utilisable lorsque le navigateur refuse localStorage', () => {
+    const { listeners } = browserEnvironment()
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get: () => {
+        throw new DOMException('Stockage refusé', 'SecurityError')
+      },
+    })
+    mocks.registerSW.mockReturnValue(vi.fn())
+    const pwa = usePwaStore()
+
+    expect(() => {
+      pwa.initialize()
+      listeners.get('beforeinstallprompt')?.({ preventDefault: vi.fn() } as unknown as Event)
+      pwa.dismissInstallOffer()
+    }).not.toThrow()
   })
 })

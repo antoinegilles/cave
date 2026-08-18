@@ -86,4 +86,52 @@ describe('recherche de la cave', () => {
     expect(cellar.searchActive).toBe(false)
     expect(cellar.searchResult).toBeNull()
   })
+
+  it('propage le compte consulté à toutes les lectures du store', async () => {
+    vi.stubGlobal('window', { location: { origin: 'https://cave.test' } })
+    post.mockResolvedValueOnce(result(0))
+    const cellar = useCellarStore()
+    cellar.startViewing({ id: 'user-a', name: 'Alice' })
+
+    await cellar.search({}, 'Tout')
+
+    expect(post).toHaveBeenCalledWith('/api/bottles/search?asUser=user-a', {})
+    expect(cellar.isReadOnly).toBe(true)
+    cellar.stopViewing()
+    expect(cellar.isReadOnly).toBe(false)
+    vi.unstubAllGlobals()
+  })
+
+  it('purge les données privées lors d’un changement de session', () => {
+    const cellar = useCellarStore()
+    cellar.racks.push({
+      id: 'rack-a',
+      name: 'Privé',
+      rows: 1,
+      cols: 1,
+      numbering: 'ROW_MAJOR',
+      startNumber: 1,
+      slots: [],
+    })
+    cellar.startViewing({ id: 'user-a', name: 'Alice' })
+
+    cellar.reset()
+
+    expect(cellar.racks).toEqual([])
+    expect(cellar.viewingUser).toBeNull()
+    expect(cellar.searchActive).toBe(false)
+  })
+
+  it('démarre même lorsque sessionStorage est interdit', () => {
+    const deniedWindow = { location: { origin: 'https://cave.test' } }
+    Object.defineProperty(deniedWindow, 'sessionStorage', {
+      get: () => {
+        throw new DOMException('Stockage refusé', 'SecurityError')
+      },
+    })
+    vi.stubGlobal('window', deniedWindow)
+
+    expect(() => useCellarStore()).not.toThrow()
+    vi.unstubAllGlobals()
+  })
 })

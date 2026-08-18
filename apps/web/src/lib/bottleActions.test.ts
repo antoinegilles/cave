@@ -38,4 +38,10 @@ describe('parcours d’ouverture', () => {
       ]),
     ).toBe('2 bouteilles ouvertes. Emplacements Cave · n° 15 et Garage · n° 17 libérés.')
   })
+
+  it('n’annonce pas un emplacement encore occupé comme libéré', () => {
+    expect(formatOpenedNotification([], 1)).toBe(
+      'Bouteille ouverte. L’emplacement contient encore des bouteilles.',
+    )
+  })
 })

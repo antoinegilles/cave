@@ -1,5 +1,11 @@
 <script setup lang="ts">
-import { STRUCTURE_LABELS, WINE_COLOR_LABELS, type StructureAxis } from '@cave/shared'
+import {
+  MAX_BOTTLES_PER_ADD,
+  MAX_SLOT_NUMBER,
+  STRUCTURE_LABELS,
+  WINE_COLOR_LABELS,
+  type StructureAxis,
+} from '@cave/shared'
 import { ArrowLeftIcon, CheckCircleIcon, PencilSquareIcon, TrashIcon } from '@heroicons/vue/24/outline'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -42,6 +48,39 @@ const editingTasting = ref(false)
 const editRating = ref<number | null>(null)
 const editNote = ref('')
 const savingTasting = ref(false)
+const locationOpen = ref(false)
+const locationBottle = ref<Bottle | null>(null)
+const locationRackId = ref('')
+const locationNumber = ref<number | string>('')
+const copiesOpen = ref(false)
+const copyRackId = ref('')
+const copyNumber = ref<number | string>('')
+const copyQuantity = ref<number | string>(1)
+const savingStock = ref(false)
+
+function inputInteger(value: number | string): number | null {
+  if (value === '') return null
+  const number = Number(value)
+  return Number.isInteger(number) ? number : null
+}
+
+const locationValid = computed(() => {
+  const number = inputInteger(locationNumber.value)
+  return locationRackId.value !== '' && number !== null && number >= 0 && number <= MAX_SLOT_NUMBER
+})
+const copiesValid = computed(() => {
+  const number = inputInteger(copyNumber.value)
+  const quantity = inputInteger(copyQuantity.value)
+  return (
+    copyRackId.value !== '' &&
+    number !== null &&
+    number >= 0 &&
+    number <= MAX_SLOT_NUMBER &&
+    quantity !== null &&
+    quantity >= 1 &&
+    quantity <= MAX_BOTTLES_PER_ADD
+  )
+})
 
 onMounted(load)
 
@@ -49,7 +88,9 @@ async function load(): Promise<void> {
   loading.value = true
   loadError.value = null
   try {
-    const data = await api.get<BottleDetailView>(`/api/bottles/${route.params['id']}`)
+    const data = await api.get<BottleDetailView>(
+      cellar.readPath(`/api/bottles/${route.params['id']}`),
+    )
     bottle.value = data.bottle
     activeBottles.value = data.activeBottles
     window_.value = data.drinkingWindow
@@ -83,6 +124,68 @@ const drinkCta = computed(() => formatDrinkCta(selectedBottles.value))
 function bottleLocation(activeBottle: Bottle): string {
   if (activeBottle.slotNumber === null) return 'Emplacement indisponible'
   return [activeBottle.rackName, `n° ${activeBottle.slotNumber}`].filter(Boolean).join(' · ')
+}
+
+function beginMove(activeBottle: Bottle): void {
+  locationBottle.value = activeBottle
+  locationRackId.value = activeBottle.rackId ?? cellar.racks[0]?.id ?? ''
+  locationNumber.value = activeBottle.slotNumber ?? ''
+  actionError.value = null
+  locationOpen.value = true
+}
+
+function beginAddCopies(): void {
+  copyRackId.value = bottle.value?.rackId ?? cellar.racks[0]?.id ?? ''
+  copyNumber.value = bottle.value?.slotNumber ?? ''
+  copyQuantity.value = 1
+  actionError.value = null
+  copiesOpen.value = true
+}
+
+async function saveLocation(): Promise<void> {
+  const slotNumber = inputInteger(locationNumber.value)
+  if (!locationBottle.value || !locationValid.value || slotNumber === null) return
+  savingStock.value = true
+  actionError.value = null
+  try {
+    await api.patch(`/api/bottles/${locationBottle.value.id}`, {
+      rackId: locationRackId.value,
+      slotNumber,
+    })
+    await cellar.loadRacks()
+    await load()
+    locationOpen.value = false
+    notifications.show('Emplacement mis à jour.')
+  } catch (reason) {
+    actionError.value = (reason as Error).message
+  } finally {
+    savingStock.value = false
+  }
+}
+
+async function addCopies(): Promise<void> {
+  const slotNumber = inputInteger(copyNumber.value)
+  const quantity = inputInteger(copyQuantity.value)
+  if (!bottle.value || !copiesValid.value || slotNumber === null || quantity === null) return
+  savingStock.value = true
+  actionError.value = null
+  try {
+    await api.post(`/api/bottles/${bottle.value.id}/copies`, {
+      placements: [{
+        rackId: copyRackId.value,
+        slotNumber,
+        quantity,
+      }],
+    })
+    await cellar.loadRacks()
+    await load()
+    copiesOpen.value = false
+    notifications.show('Exemplaire(s) ajouté(s).')
+  } catch (reason) {
+    actionError.value = (reason as Error).message
+  } finally {
+    savingStock.value = false
+  }
 }
 
 function openDrinkSheet(): void {
@@ -131,7 +234,7 @@ async function drink(): Promise<void> {
       personalNote: drinkNote.value.trim() || null,
     })
     await cellar.loadRacks()
-    notifications.show(formatOpenedNotification(result.freedSlots))
+    notifications.show(formatOpenedNotification(result.freedSlots, result.bottles.length))
     router.push({ name: 'cellar' })
   } catch (e) {
     actionError.value = (e as Error).message
@@ -180,24 +283,34 @@ async function saveTasting(): Promise<void> {
   }
 }
 
-const confirmingRemove = ref(false)
+const confirmingRemove = ref<Bottle | null>(null)
 const removing = ref(false)
 
 async function remove(): Promise<void> {
-  if (!bottle.value) return
+  const target = confirmingRemove.value
+  if (!target) return
   removing.value = true
   actionError.value = null
   try {
-    await api.delete(`/api/bottles/${bottle.value.id}`)
+    await api.delete(`/api/bottles/${target.id}`)
     await cellar.loadRacks()
     notifications.show('Bouteille supprimée.')
-    router.push({ name: 'cellar' })
+    const remaining = activeBottles.value.filter((activeBottle) => activeBottle.id !== target.id)
+    confirmingRemove.value = null
+    if (remaining.length === 0) {
+      await router.push({ name: 'cellar' })
+    } else if (target.id === bottle.value?.id) {
+      await router.replace({ name: 'bottle', params: { id: remaining[0]!.id } })
+      await load()
+    } else {
+      await load()
+    }
   } catch (e) {
     actionError.value = (e as Error).message
     notifications.show(actionError.value, 'error')
   } finally {
     removing.value = false
-    if (!actionError.value) confirmingRemove.value = false
+    if (!actionError.value) confirmingRemove.value = null
   }
 }
 </script>
@@ -298,16 +411,28 @@ async function remove(): Promise<void> {
           {{ activeBottles.length }}
           {{ activeBottles.length > 1 ? 'exemplaires en cave' : 'exemplaire en cave' }}
         </h2>
-        <ul class="flex flex-wrap gap-2" aria-label="Emplacements de ce vin">
+        <ul class="space-y-2" aria-label="Emplacements de ce vin">
           <li
             v-for="activeBottle in activeBottles"
             :key="activeBottle.id"
-            class="rounded-lg bg-surface-2 px-3 py-2 text-sm text-text"
+            class="flex flex-wrap items-center gap-2 rounded-lg bg-surface-2 px-3 py-2 text-sm text-text"
             :class="activeBottle.slotNumber === null ? 'text-warning' : ''"
           >
-            {{ bottleLocation(activeBottle) }}
+            <span class="min-w-0 flex-1">{{ bottleLocation(activeBottle) }}</span>
+            <template v-if="!cellar.isReadOnly">
+              <button type="button" class="min-h-10 rounded-lg px-3 font-medium text-accent hover:bg-accent-soft" @click="beginMove(activeBottle)">Modifier</button>
+              <button type="button" class="min-h-10 rounded-lg px-3 font-medium text-danger hover:bg-danger-soft" @click="confirmingRemove = activeBottle">Supprimer</button>
+            </template>
           </li>
         </ul>
+        <button
+          v-if="!cellar.isReadOnly"
+          type="button"
+          class="mt-3 min-h-11 w-full rounded-xl border border-accent font-semibold text-accent hover:bg-accent-soft"
+          @click="beginAddCopies"
+        >
+          Ajouter des exemplaires
+        </button>
       </div>
 
       <!-- Accords : la raison d'être de l'app -->
@@ -381,7 +506,7 @@ async function remove(): Promise<void> {
       </p>
 
       <!-- Ouvrir un ou plusieurs exemplaires du groupe -->
-      <div v-if="bottle.status === 'IN_CELLAR'">
+      <div v-if="bottle.status === 'IN_CELLAR' && !cellar.isReadOnly">
         <button
           type="button"
           class="flex w-full items-center justify-center gap-2 rounded-xl bg-accent py-4 text-lg font-semibold text-accent-text shadow-card transition-colors hover:bg-accent-hover"
@@ -391,7 +516,7 @@ async function remove(): Promise<void> {
         </button>
       </div>
 
-      <div v-else class="space-y-4 rounded-2xl border border-line bg-surface p-5">
+      <div v-else-if="bottle.status === 'DRUNK'" class="space-y-4 rounded-2xl border border-line bg-surface p-5">
         <div class="flex items-start justify-between gap-3">
           <div>
             <h2 class="font-display text-lg font-semibold text-text">Dégustation</h2>
@@ -401,7 +526,7 @@ async function remove(): Promise<void> {
             </p>
           </div>
           <button
-            v-if="!editingTasting"
+            v-if="!editingTasting && !cellar.isReadOnly"
             type="button"
             class="flex min-h-11 items-center gap-2 rounded-xl border border-line px-3 text-sm font-medium text-muted transition-colors hover:bg-surface-hover hover:text-text"
             @click="startTastingEdit"
@@ -488,24 +613,64 @@ async function remove(): Promise<void> {
       <!-- Action destructrice : un vrai bouton, mais volontairement en second plan
            (contour plutôt que fond plein) pour ne pas concurrencer l'action principale. -->
       <button
+        v-if="!cellar.isReadOnly"
         type="button"
         class="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-danger bg-transparent py-3 font-medium text-danger transition-colors hover:bg-danger-soft"
-        @click="confirmingRemove = true"
+        @click="confirmingRemove = bottle"
       >
         <TrashIcon class="h-5 w-5" aria-hidden="true" />
         Supprimer cette bouteille
       </button>
 
       <ConfirmSheet
-        :open="confirmingRemove"
+        :open="confirmingRemove !== null"
         title="Supprimer cette bouteille ?"
         message="La bouteille et son historique de dégustation seront définitivement effacés."
         confirm-label="Supprimer"
         danger
         :busy="removing"
         @confirm="remove"
-        @cancel="confirmingRemove = false"
+        @cancel="confirmingRemove = null"
       />
+
+      <BottomSheet :open="locationOpen" title="Modifier l’emplacement" @close="locationOpen = false">
+        <div class="grid gap-3 sm:grid-cols-2">
+          <label class="text-sm text-muted">Casier
+            <select v-model="locationRackId" class="mt-1 w-full rounded-xl border border-line bg-surface p-3 text-text">
+              <option v-for="rack in cellar.racks" :key="rack.id" :value="rack.id">{{ rack.name }}</option>
+            </select>
+          </label>
+          <label class="text-sm text-muted">Numéro
+            <input v-model.number="locationNumber" type="number" min="0" :max="MAX_SLOT_NUMBER" class="mt-1 w-full rounded-xl border border-line bg-surface p-3 text-text" />
+          </label>
+        </div>
+        <template #actions>
+          <button type="button" class="w-full rounded-xl bg-accent px-4 py-3 font-semibold text-accent-text disabled:opacity-50" :disabled="savingStock || !locationValid" @click="saveLocation">
+            {{ savingStock ? 'Enregistrement…' : 'Enregistrer' }}
+          </button>
+        </template>
+      </BottomSheet>
+
+      <BottomSheet :open="copiesOpen" title="Ajouter des exemplaires" @close="copiesOpen = false">
+        <div class="grid gap-3 sm:grid-cols-3">
+          <label class="text-sm text-muted">Casier
+            <select v-model="copyRackId" class="mt-1 w-full rounded-xl border border-line bg-surface p-3 text-text">
+              <option v-for="rack in cellar.racks" :key="rack.id" :value="rack.id">{{ rack.name }}</option>
+            </select>
+          </label>
+          <label class="text-sm text-muted">Numéro
+            <input v-model.number="copyNumber" type="number" min="0" :max="MAX_SLOT_NUMBER" class="mt-1 w-full rounded-xl border border-line bg-surface p-3 text-text" />
+          </label>
+          <label class="text-sm text-muted">Quantité
+            <input v-model.number="copyQuantity" type="number" min="1" :max="MAX_BOTTLES_PER_ADD" class="mt-1 w-full rounded-xl border border-line bg-surface p-3 text-text" />
+          </label>
+        </div>
+        <template #actions>
+          <button type="button" class="w-full rounded-xl bg-accent px-4 py-3 font-semibold text-accent-text disabled:opacity-50" :disabled="savingStock || !copiesValid" @click="addCopies">
+            {{ savingStock ? 'Ajout…' : 'Ajouter' }}
+          </button>
+        </template>
+      </BottomSheet>
 
       <BottomSheet
         :open="drinkOpen"

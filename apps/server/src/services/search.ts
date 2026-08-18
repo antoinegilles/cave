@@ -53,8 +53,8 @@ export interface SearchOutcome {
   interpretedFoodTags: string[]
 }
 
-export async function searchBottles(input: SearchInput): Promise<SearchOutcome> {
-  const and: NonNullable<BottleWhere>[] = [{ status: input.status }]
+export async function searchBottles(input: SearchInput, ownerId: string): Promise<SearchOutcome> {
+  const and: NonNullable<BottleWhere>[] = [{ status: input.status }, { ownerId }]
 
   if (input.q) {
     const or = buildTextFilter(input.q)
@@ -100,9 +100,16 @@ export async function searchBottles(input: SearchInput): Promise<SearchOutcome> 
 
   return {
     bottles: filtered.map(serializeBottle),
-    matchedSlots: filtered
-      .filter((b) => b.slot)
-      .map((b) => ({ rackId: b.slot!.rackId, slotNumber: b.slot!.number })),
+    matchedSlots: [
+      ...new Map(
+        filtered
+          .filter((b) => b.slot)
+          .map((b) => [
+            `${b.slot!.rackId}:${b.slot!.number}`,
+            { rackId: b.slot!.rackId, slotNumber: b.slot!.number },
+          ]),
+      ).values(),
+    ],
     total: filtered.length,
     interpretedFoodTags: input.q ? matchFoodTags(input.q) : [],
   }

@@ -192,7 +192,7 @@ async function runAi(currentInteraction: number, submittedPrompt: string): Promi
   aiThinking.value = true
   aiError.value = null
   try {
-    const result = await api.post<SommelierResult>('/api/ai/sommelier', {
+    const result = await api.post<SommelierResult>(cellar.readPath('/api/ai/sommelier'), {
       // Capture faite au clic/Entrée : une modification pendant la réponse SQL ne peut pas
       // changer silencieusement la question réellement facturée au quota.
       prompt: submittedPrompt,

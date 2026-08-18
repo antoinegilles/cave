@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   findManySlots: vi.fn(),
+  createBottle: vi.fn(),
   createManyBottles: vi.fn(),
   findManyBottles: vi.fn(),
   findUniqueBottle: vi.fn(),
@@ -10,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   updateBottle: vi.fn(),
   transaction: vi.fn(),
   upsertWine: vi.fn(),
+  searchBottles: vi.fn(),
 }))
 
 vi.mock('../lib/prisma.js', () => ({
@@ -17,13 +19,14 @@ vi.mock('../lib/prisma.js', () => ({
     $transaction: mocks.transaction,
     bottle: {
       findMany: mocks.findManyBottles,
+      findFirst: mocks.findUniqueBottle,
       findUnique: mocks.findUniqueBottle,
       update: mocks.updateBottle,
     },
   },
 }))
 vi.mock('../providers/heuristics.js', () => ({ enrichWineData: (wine: unknown) => wine }))
-vi.mock('../services/search.js', () => ({ searchBottles: vi.fn() }))
+vi.mock('../services/search.js', () => ({ searchBottles: mocks.searchBottles }))
 vi.mock('../services/serialize.js', () => ({ serializeBottle: (bottle: unknown) => bottle }))
 vi.mock('../services/wines.js', () => ({
   drinkingWindow: vi.fn(),
@@ -34,6 +37,7 @@ import bottleRoutes from './bottles.js'
 
 interface TestSlot {
   id: string
+  rackId: string
   number: number
   bottles: { id: string }[]
 }
@@ -73,7 +77,18 @@ async function routeHandler(
   } as unknown as FastifyInstance
 
   await bottleRoutes(app)
-  return handlers[method].get(path)!
+  const handler = handlers[method].get(path)!
+  return (request, reply) =>
+    handler(
+      {
+        ...(request as Record<string, unknown>),
+        currentUser: (request as { currentUser?: unknown }).currentUser ?? {
+          id: 'user-1',
+          role: 'USER',
+        },
+      },
+      reply,
+    )
 }
 
 async function createHandler(): Promise<RouteHandler> {
@@ -104,21 +119,28 @@ describe('POST /api/bottles — ajout en lot', () => {
     mocks.transaction.mockImplementation(async (callback) =>
       callback({
         slot: { findMany: mocks.findManySlots },
-        bottle: { createMany: mocks.createManyBottles, findMany: mocks.findManyBottles },
+        bottle: {
+          create: mocks.createBottle,
+          createMany: mocks.createManyBottles,
+          findMany: mocks.findManyBottles,
+        },
       }),
     )
     mocks.upsertWine.mockResolvedValue('wine-1')
-    mocks.createManyBottles.mockImplementation(({ data }: { data: TestBottleData[] }) => {
-      mocks.findManyBottles.mockResolvedValue(
-        data.map((bottle) => ({ id: `bottle-${bottle.slotId}`, ...bottle })).reverse(),
-      )
-      return { count: data.length }
+    const created: Array<TestBottleData & { id: string }> = []
+    mocks.createBottle.mockImplementation(({ data }: { data: TestBottleData }) => {
+      const sameSlot = created.filter((bottle) => bottle.slotId === data.slotId).length
+      const id = `bottle-${data.slotId}${sameSlot === 0 ? '' : `-${sameSlot + 1}`}`
+      created.push({ id, ...data })
+      mocks.findManyBottles.mockResolvedValue([...created].reverse())
+      return { id }
     })
   })
 
   it('crée un exemplaire par emplacement avec une seule fiche vin', async () => {
     const slots: TestSlot[] = [12, 14, 15].map((number) => ({
       id: `slot-${number}`,
+      rackId: 'rack-1',
       number,
       bottles: [],
     }))
@@ -144,15 +166,15 @@ describe('POST /api/bottles — ajout en lot', () => {
       expect.objectContaining(wine),
       expect.objectContaining({ bottle: expect.anything() }),
     )
-    expect(mocks.createManyBottles).toHaveBeenCalledTimes(1)
+    expect(mocks.createBottle).toHaveBeenCalledTimes(3)
     expect(
-      mocks.createManyBottles.mock.calls[0]?.[0].data.map(
-        (input: TestBottleData) => input.slotId,
-      ),
+      mocks.createBottle.mock.calls.map((call) => (call[0].data as TestBottleData).slotId),
     ).toEqual(['slot-12', 'slot-14', 'slot-15'])
-    for (const input of mocks.createManyBottles.mock.calls[0]?.[0].data as TestBottleData[]) {
+    for (const call of mocks.createBottle.mock.calls) {
+      const input = call[0].data as TestBottleData
       expect(input).toMatchObject({
         wineId: 'wine-1',
+        ownerId: 'user-1',
         personalNote: 'Même carton',
         purchasePrice: 18,
         labelPhotoPath: '/labels/carton.jpg',
@@ -168,8 +190,28 @@ describe('POST /api/bottles — ajout en lot', () => {
     })
   })
 
+  it('crée plusieurs exemplaires dans le même emplacement avec quantity', async () => {
+    mocks.findManySlots.mockResolvedValue([
+      { id: 'slot-1001', rackId: 'rack-1', number: 1001, bottles: [{ id: 'existing' }] },
+    ])
+    const handler = await createHandler()
+    const response = createReply()
+
+    const result = await handler(
+      request({
+        wine,
+        placements: [{ rackId: 'rack-1', slotNumber: 1001, quantity: 3 }],
+      }),
+      response.reply,
+    ) as { bottles: unknown[] }
+
+    expect(response.status).toBe(201)
+    expect(mocks.createBottle).toHaveBeenCalledTimes(3)
+    expect(result.bottles).toHaveLength(3)
+  })
+
   it('préserve le contrat unitaire slotNumber et la réponse bottle', async () => {
-    mocks.findManySlots.mockResolvedValue([{ id: 'slot-12', number: 12, bottles: [] }])
+    mocks.findManySlots.mockResolvedValue([{ id: 'slot-12', rackId: 'rack-1', number: 12, bottles: [] }])
     const handler = await createHandler()
     const response = createReply()
 
@@ -186,7 +228,7 @@ describe('POST /api/bottles — ajout en lot', () => {
   })
 
   it('ne crée rien si un emplacement est absent et retourne les numéros concernés', async () => {
-    mocks.findManySlots.mockResolvedValue([{ id: 'slot-12', number: 12, bottles: [] }])
+    mocks.findManySlots.mockResolvedValue([{ id: 'slot-12', rackId: 'rack-1', number: 12, bottles: [] }])
     const handler = await createHandler()
     const response = createReply()
 
@@ -195,16 +237,15 @@ describe('POST /api/bottles — ajout en lot', () => {
       response.reply,
     )
 
-    expect(response.status).toBe(400)
-    expect(mocks.upsertWine).not.toHaveBeenCalled()
-    expect(mocks.createManyBottles).not.toHaveBeenCalled()
+    expect(response.status).toBe(404)
+    expect(mocks.createBottle).not.toHaveBeenCalled()
     expect(result).toMatchObject({ slotNumbers: [14], missingSlotNumbers: [14] })
   })
 
-  it('ne crée rien si un emplacement est occupé', async () => {
+  it('ajoute des bouteilles dans un emplacement déjà occupé', async () => {
     mocks.findManySlots.mockResolvedValue([
-      { id: 'slot-12', number: 12, bottles: [] },
-      { id: 'slot-14', number: 14, bottles: [{ id: 'existing' }] },
+      { id: 'slot-12', rackId: 'rack-1', number: 12, bottles: [] },
+      { id: 'slot-14', rackId: 'rack-1', number: 14, bottles: [{ id: 'existing' }] },
     ])
     const handler = await createHandler()
     const response = createReply()
@@ -214,15 +255,14 @@ describe('POST /api/bottles — ajout en lot', () => {
       response.reply,
     )
 
-    expect(response.status).toBe(409)
-    expect(mocks.upsertWine).not.toHaveBeenCalled()
-    expect(mocks.createManyBottles).not.toHaveBeenCalled()
-    expect(result).toMatchObject({ slotNumbers: [14], occupiedSlotNumbers: [14] })
+    expect(response.status).toBe(201)
+    expect(mocks.createBottle).toHaveBeenCalledTimes(2)
+    expect(result).toMatchObject({ bottles: [{ slotId: 'slot-12' }, { slotId: 'slot-14' }] })
   })
 
-  it('retourne ensemble les emplacements absents et occupés sans rien créer', async () => {
+  it('ignore l’occupation mais refuse atomiquement un emplacement absent', async () => {
     mocks.findManySlots.mockResolvedValue([
-      { id: 'slot-12', number: 12, bottles: [{ id: 'existing' }] },
+      { id: 'slot-12', rackId: 'rack-1', number: 12, bottles: [{ id: 'existing' }] },
     ])
     const handler = await createHandler()
     const response = createReply()
@@ -232,21 +272,19 @@ describe('POST /api/bottles — ajout en lot', () => {
       response.reply,
     )
 
-    expect(response.status).toBe(400)
-    expect(mocks.upsertWine).not.toHaveBeenCalled()
-    expect(mocks.createManyBottles).not.toHaveBeenCalled()
+    expect(response.status).toBe(404)
+    expect(mocks.createBottle).not.toHaveBeenCalled()
     expect(result).toMatchObject({
-      slotNumbers: [12, 14],
+      slotNumbers: [14],
       missingSlotNumbers: [14],
-      occupiedSlotNumbers: [12],
+      occupiedSlotNumbers: [],
     })
     expect(result.error).toContain('14')
-    expect(result.error).toContain('12')
   })
 
   it('laisse remonter une erreur de création pour que Prisma annule toute la transaction', async () => {
-    mocks.findManySlots.mockResolvedValue([{ id: 'slot-12', number: 12, bottles: [] }])
-    mocks.createManyBottles.mockRejectedValue(new Error('Échec d’écriture'))
+    mocks.findManySlots.mockResolvedValue([{ id: 'slot-12', rackId: 'rack-1', number: 12, bottles: [] }])
+    mocks.createBottle.mockRejectedValue(new Error('Échec d’écriture'))
     const handler = await createHandler()
     const response = createReply()
 
@@ -254,6 +292,17 @@ describe('POST /api/bottles — ajout en lot', () => {
       handler(request({ wine, rackId: 'rack-1', slotNumber: 12 }), response.reply),
     ).rejects.toThrow('Échec d’écriture')
     expect(mocks.transaction).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('POST /api/bottles/search — isolation', () => {
+  it('transmet le propriétaire connecté au service', async () => {
+    mocks.searchBottles.mockResolvedValue({ bottles: [], matchedSlots: [], total: 0 })
+    const handler = await routeHandler('post', '/search')
+
+    await handler(request({}), createReply().reply)
+
+    expect(mocks.searchBottles).toHaveBeenCalledWith(expect.any(Object), 'user-1')
   })
 })
 
@@ -314,7 +363,9 @@ describe('GET /api/bottles/:id — exemplaires actifs', () => {
     }
 
     expect(mocks.findManyBottles).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { wineId: 'wine-1', status: 'IN_CELLAR' } }),
+      expect.objectContaining({
+        where: { wineId: 'wine-1', status: 'IN_CELLAR', ownerId: 'user-1' },
+      }),
     )
     expect(result.activeBottles.map((bottle) => bottle.id)).toEqual([
       'bottle-15',
@@ -368,7 +419,10 @@ describe('POST /api/bottles/drink — ouverture atomique', () => {
   it('ouvre tous les exemplaires du même vin et mémorise leurs emplacements avant détachement', async () => {
     const before = [activeBottle('bottle-15', 15), activeBottle('bottle-17', 17)]
     const after = before.map((bottle) => ({ ...bottle, status: 'DRUNK', slotId: null, slot: null }))
-    mocks.findManyBottles.mockResolvedValueOnce(before).mockResolvedValueOnce(after)
+    mocks.findManyBottles
+      .mockResolvedValueOnce(before)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(after)
     const handler = await routeHandler('post', '/drink')
     const response = createReply()
 
@@ -389,6 +443,7 @@ describe('POST /api/bottles/drink — ouverture atomique', () => {
         ],
         status: 'IN_CELLAR',
         wineId: 'wine-1',
+        ownerId: 'user-1',
       },
       data: expect.objectContaining({
         status: 'DRUNK',
@@ -406,16 +461,36 @@ describe('POST /api/bottles/drink — ouverture atomique', () => {
     })
   })
 
+  it('ne déclare pas libéré un emplacement qui contient encore une autre bouteille', async () => {
+    const before = [activeBottle('bottle-15', 15)]
+    const after = [{ ...before[0], status: 'DRUNK', slotId: null, slot: null }]
+    mocks.findManyBottles
+      .mockResolvedValueOnce(before)
+      .mockResolvedValueOnce([{ slotId: 'slot-15' }])
+      .mockResolvedValueOnce(after)
+    mocks.updateManyBottles.mockResolvedValue({ count: 1 })
+    const handler = await routeHandler('post', '/drink')
+
+    const result = (await handler(
+      request({ bottleIds: ['bottle-15'] }),
+      createReply().reply,
+    )) as { freedSlots: unknown[] }
+
+    expect(result.freedSlots).toEqual([])
+  })
+
   it.each([
     {
       label: 'un identifiant absent',
       bottles: [activeBottle('bottle-15', 15)],
       ids: ['bottle-15', 'missing'],
+      status: 404,
     },
     {
       label: 'deux vins différents',
       bottles: [activeBottle('bottle-15', 15), activeBottle('bottle-17', 17, 'wine-2')],
       ids: ['bottle-15', 'bottle-17'],
+      status: 409,
     },
     {
       label: 'une bouteille déjà bue',
@@ -424,17 +499,18 @@ describe('POST /api/bottles/drink — ouverture atomique', () => {
         { ...activeBottle('bottle-17', 17), status: 'DRUNK' },
       ],
       ids: ['bottle-15', 'bottle-17'],
+      status: 409,
     },
-  ])('répond 409 sans écrire pour $label', async ({ bottles, ids }) => {
+  ])('refuse sans écrire pour $label', async ({ bottles, ids, status }) => {
     mocks.findManyBottles.mockResolvedValue(bottles)
     const handler = await routeHandler('post', '/drink')
     const response = createReply()
 
     const result = await handler(request({ bottleIds: ids }), response.reply)
 
-    expect(response.status).toBe(409)
+    expect(response.status).toBe(status)
     expect(mocks.updateManyBottles).not.toHaveBeenCalled()
-    expect(result).toMatchObject({ bottleIds: ids })
+    expect(result).toMatchObject({ error: expect.any(String) })
   })
 
   it('annule la transaction si le nombre de lignes modifiées révèle un conflit concurrent', async () => {
@@ -458,7 +534,10 @@ describe('POST /api/bottles/drink — ouverture atomique', () => {
   it('copie aussi un commentaire commun vide sur tous les exemplaires', async () => {
     const before = [activeBottle('bottle-15', 15), activeBottle('bottle-17', 17)]
     const after = before.map((bottle) => ({ ...bottle, status: 'DRUNK', slotId: null, slot: null }))
-    mocks.findManyBottles.mockResolvedValueOnce(before).mockResolvedValueOnce(after)
+    mocks.findManyBottles
+      .mockResolvedValueOnce(before)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(after)
     const handler = await routeHandler('post', '/drink')
     const response = createReply()
 
@@ -472,7 +551,10 @@ describe('POST /api/bottles/drink — ouverture atomique', () => {
   it('conserve l’endpoint unitaire historique et sa forme de réponse', async () => {
     const before = activeBottle('bottle-15', 15)
     const after = { ...before, status: 'DRUNK', slotId: null, slot: null }
-    mocks.findManyBottles.mockResolvedValueOnce([before]).mockResolvedValueOnce([after])
+    mocks.findManyBottles
+      .mockResolvedValueOnce([before])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([after])
     mocks.updateManyBottles.mockResolvedValue({ count: 1 })
     const handler = await routeHandler('post', '/:id/drink')
     const response = createReply()

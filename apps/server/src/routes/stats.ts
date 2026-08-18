@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { resolveCellarOwner } from '../lib/ownership.js'
 import { prisma } from '../lib/prisma.js'
 import { serializeBottle } from '../services/serialize.js'
 import { drinkingWindow } from '../services/wines.js'
@@ -6,9 +7,10 @@ import { drinkingWindow } from '../services/wines.js'
 export default async function statsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate)
 
-  app.get('/', async () => {
+  app.get('/', async (req) => {
+    const ownerId = await resolveCellarOwner(req)
     const bottles = await prisma.bottle.findMany({
-      where: { status: 'IN_CELLAR' },
+      where: { status: 'IN_CELLAR', ownerId },
       include: { wine: { include: { foodTags: { include: { foodTag: true } } } } },
     })
 
@@ -34,7 +36,7 @@ export default async function statsRoutes(app: FastifyInstance) {
       }
     }
 
-    const drunk = await prisma.bottle.count({ where: { status: 'DRUNK' } })
+    const drunk = await prisma.bottle.count({ where: { status: 'DRUNK', ownerId } })
 
     return {
       inCellar: bottles.length,
@@ -57,9 +59,10 @@ export default async function statsRoutes(app: FastifyInstance) {
    * C'est la vraie valeur ajoutée sur Vivino : savoir ce qu'il faut ouvrir maintenant
    * plutôt que de découvrir une bouteille passée.
    */
-  app.get('/drink-soon', async () => {
+  app.get('/drink-soon', async (req) => {
+    const ownerId = await resolveCellarOwner(req)
     const bottles = await prisma.bottle.findMany({
-      where: { status: 'IN_CELLAR' },
+      where: { status: 'IN_CELLAR', ownerId },
       include: {
         wine: { include: { foodTags: { include: { foodTag: true } } } },
         slot: { include: { rack: true } },
@@ -88,9 +91,10 @@ export default async function statsRoutes(app: FastifyInstance) {
 
   /** Historique de dégustation — ce que Vivino facturait. */
   app.get('/history', async (req) => {
+    const ownerId = await resolveCellarOwner(req)
     const { limit } = req.query as { limit?: string }
     const bottles = await prisma.bottle.findMany({
-      where: { status: 'DRUNK' },
+      where: { status: 'DRUNK', ownerId },
       orderBy: { drunkAt: 'desc' },
       take: Math.min(Number.parseInt(limit ?? '100', 10) || 100, 500),
       include: {

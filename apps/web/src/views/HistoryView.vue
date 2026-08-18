@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { api } from '../lib/api'
 import type { BottleView, DrinkSoonEntry } from '../lib/types'
+import { useCellarStore } from '../stores/cellar'
 
 /**
  * Historique de dégustation et bouteilles à ouvrir.
@@ -14,12 +15,13 @@ const tab = ref<'soon' | 'history'>('soon')
 const history = ref<BottleView[]>([])
 const drinkSoon = ref<DrinkSoonEntry[]>([])
 const loading = ref(true)
+const cellar = useCellarStore()
 
 onMounted(async () => {
   try {
     const [soon, hist] = await Promise.all([
-      api.get<{ bottles: DrinkSoonEntry[] }>('/api/stats/drink-soon'),
-      api.get<{ bottles: BottleView[] }>('/api/stats/history'),
+      api.get<{ bottles: DrinkSoonEntry[] }>(cellar.readPath('/api/stats/drink-soon')),
+      api.get<{ bottles: BottleView[] }>(cellar.readPath('/api/stats/history')),
     ])
     drinkSoon.value = soon.bottles
     history.value = hist.bottles

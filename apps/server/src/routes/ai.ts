@@ -1,6 +1,7 @@
 import { AI_PROMPT_MAX_LENGTH, sommelierSchema } from '@cave/shared'
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
+import { resolveCellarOwner } from '../lib/ownership.js'
 import { GeminiError, isGeminiConfigured } from '../services/gemini.js'
 import {
   QuotaExceededError,
@@ -48,7 +49,11 @@ export default async function aiRoutes(app: FastifyInstance) {
       }
 
       try {
-        return await askSommelier(req.currentUser!.id, parsed.data.prompt)
+        return await askSommelier(
+          req.currentUser!.id,
+          parsed.data.prompt,
+          await resolveCellarOwner(req),
+        )
       } catch (error) {
         if (error instanceof QuotaExceededError) {
           return reply.code(429).send({ error: error.message, remaining: 0 })

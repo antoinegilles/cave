@@ -1,9 +1,9 @@
 import { randomBytes } from 'node:crypto'
 import { FEATURE_FLAGS, FOOD_TAGS } from '@cave/shared'
 import { config } from './config.js'
+import { defaultCellarCreate } from './lib/defaultCellar.js'
 import { hashPassword } from './lib/password.js'
 import { prisma } from './lib/prisma.js'
-import { generateSlots } from './lib/slots.js'
 
 /**
  * Données de référence, appliquées à chaque démarrage (idempotent).
@@ -39,7 +39,11 @@ export async function seedReferenceData(): Promise<void> {
 async function bootstrap(): Promise<void> {
   await seedReferenceData()
 
-  if ((await prisma.user.count()) === 0) {
+  let cellarOwner = await prisma.user.findFirst({
+    orderBy: [{ role: 'asc' }, { createdAt: 'asc' }],
+  })
+
+  if (!cellarOwner) {
     // `||` et non `??` : dans un fichier .env, une variable déclarée mais non renseignée
     // vaut la chaîne vide, pas `undefined`. Avec `??`, `ADMIN_PASSWORD=` créerait un compte
     // administrateur au mot de passe vide.
@@ -51,14 +55,18 @@ async function bootstrap(): Promise<void> {
       process.exit(1)
     }
 
-    await prisma.user.create({
-      data: {
-        email: email.toLowerCase(),
-        name: process.env['ADMIN_NAME'] || 'Administrateur',
-        role: 'ADMIN',
-        passwordHash: await hashPassword(password),
-      },
-    })
+    const passwordHash = await hashPassword(password)
+    cellarOwner = await prisma.$transaction((tx) =>
+      tx.user.create({
+        data: {
+          email: email.toLowerCase(),
+          name: process.env['ADMIN_NAME'] || 'Administrateur',
+          role: 'ADMIN',
+          passwordHash,
+          racks: { create: defaultCellarCreate('Cave principale') },
+        },
+      }),
+    )
 
     console.log('\n┌─────────────────────────────────────────────────┐')
     console.log('│  Compte administrateur créé                     │')
@@ -68,20 +76,14 @@ async function bootstrap(): Promise<void> {
     console.log('   Note-le maintenant : il ne sera plus affiché.\n')
   }
 
-  if ((await prisma.rack.count()) === 0) {
-    const rows = 6
-    const cols = 10
+  if ((await prisma.rack.count({ where: { ownerId: cellarOwner.id } })) === 0) {
     await prisma.rack.create({
       data: {
-        name: 'Cave principale',
-        rows,
-        cols,
-        numbering: 'ROW_MAJOR',
-        startNumber: 1,
-        slots: { create: generateSlots(rows, cols, 'ROW_MAJOR', 1) },
+        ownerId: cellarOwner.id,
+        ...defaultCellarCreate('Cave principale'),
       },
     })
-    console.log(`Casier « Cave principale » créé (${rows} × ${cols} = ${rows * cols} emplacements).`)
+    console.log('Casier « Cave principale » créé (6 × 10 = 60 emplacements).')
   }
 }
 

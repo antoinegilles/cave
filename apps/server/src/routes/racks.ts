@@ -1,27 +1,33 @@
 import {
   MAX_RACK_SLOTS,
+  MAX_SLOT_NUMBER,
   createRackSchema,
+  renumberRackSchema,
   updateRackSchema,
   updateSlotNumberSchema,
 } from '@cave/shared'
 import type { FastifyInstance } from 'fastify'
+import { resolveCellarOwner } from '../lib/ownership.js'
 import { prisma } from '../lib/prisma.js'
-import { generateSlots, reconcileSlots } from '../lib/slots.js'
+import { generateSlots, reconcileSlots, renumberByRow } from '../lib/slots.js'
 import { serializeBottle } from '../services/serialize.js'
 
 export default async function rackRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate)
 
   /** Renvoie les casiers avec leurs emplacements et la bouteille présente dans chacun. */
-  app.get('/', async () => {
+  app.get('/', async (req) => {
+    const ownerId = await resolveCellarOwner(req)
     const racks = await prisma.rack.findMany({
+      where: { ownerId },
       orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
       include: {
         slots: {
           orderBy: { number: 'asc' },
           include: {
             bottles: {
-              where: { status: 'IN_CELLAR' },
+              // Défense en profondeur pour les bases issues de l'ancien modèle partagé.
+              where: { status: 'IN_CELLAR', ownerId },
               include: {
                 wine: { include: { foodTags: { include: { foodTag: true } } } },
                 // Sans cette relation, `serializeBottle` renvoyait `slotNumber: null` et la
@@ -48,22 +54,26 @@ export default async function rackRoutes(app: FastifyInstance) {
           number: slot.number,
           row: slot.row,
           col: slot.col,
+          bottles: slot.bottles.map(serializeBottle),
+          // Compatibilité d'un ancien client PWA pendant le déploiement coordonné.
           bottle: slot.bottles[0] ? serializeBottle(slot.bottles[0]) : null,
         })),
       })),
     }
   })
 
-  app.post('/', { preHandler: app.requireAdmin }, async (req, reply) => {
+  app.post('/', async (req, reply) => {
     const parsed = createRackSchema.safeParse(req.body)
     if (!parsed.success) {
       return reply.code(400).send({ error: 'Requête invalide', issues: parsed.error.issues })
     }
     const { name, rows, cols, numbering, startNumber } = parsed.data
 
-    const count = await prisma.rack.count()
+    const ownerId = req.currentUser!.id
+    const count = await prisma.rack.count({ where: { ownerId } })
     const rack = await prisma.rack.create({
       data: {
+        ownerId,
         name,
         rows,
         cols,
@@ -77,14 +87,14 @@ export default async function rackRoutes(app: FastifyInstance) {
     return reply.code(201).send({ rack: { id: rack.id, name: rack.name } })
   })
 
-  app.patch('/:id', { preHandler: app.requireAdmin }, async (req, reply) => {
+  app.patch('/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
     const parsed = updateRackSchema.safeParse(req.body)
     if (!parsed.success) {
       return reply.code(400).send({ error: 'Requête invalide', issues: parsed.error.issues })
     }
 
-    const rack = await prisma.rack.findUnique({ where: { id } })
+    const rack = await prisma.rack.findFirst({ where: { id, ownerId: req.currentUser!.id } })
     if (!rack) return reply.code(404).send({ error: 'Casier introuvable' })
 
     const next = {
@@ -97,6 +107,11 @@ export default async function rackRoutes(app: FastifyInstance) {
     if (next.rows * next.cols > MAX_RACK_SLOTS) {
       return reply.code(400).send({
         error: `Un casier ne peut pas dépasser ${MAX_RACK_SLOTS.toLocaleString('fr-FR')} emplacements.`,
+      })
+    }
+    if (next.startNumber + next.rows * next.cols - 1 > MAX_SLOT_NUMBER) {
+      return reply.code(400).send({
+        error: `La numérotation dépasserait ${MAX_SLOT_NUMBER.toLocaleString('fr-FR')}.`,
       })
     }
 
@@ -120,13 +135,32 @@ export default async function rackRoutes(app: FastifyInstance) {
     // dans un emplacement qui n'existe plus. On refuse tant que ces bouteilles n'ont pas
     // été déplacées, plutôt que de les détacher sans prévenir. Le test porte sur les
     // **positions** : c'est la case physique qui disparaît, pas son étiquette.
-    const { toCreate, toDelete } = reconcileSlots(
-      existing,
-      next.rows,
-      next.cols,
-      next.numbering,
-      next.startNumber,
+    const generatedByPosition = new Map(
+      generateSlots(next.rows, next.cols, next.numbering, next.startNumber).map((slot) => [
+        `${slot.row}:${slot.col}`,
+        slot.number,
+      ]),
     )
+    const slotsToReconcile = renumbered
+      ? existing.map((slot) => ({
+          ...slot,
+          number: generatedByPosition.get(`${slot.row}:${slot.col}`) ?? slot.number,
+        }))
+      : existing
+
+    let reconciliation
+    try {
+      reconciliation = reconcileSlots(
+        slotsToReconcile,
+        next.rows,
+        next.cols,
+        next.numbering,
+        next.startNumber,
+      )
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message })
+    }
+    const { toCreate, toDelete } = reconciliation
 
     const orphaned = await prisma.bottle.findMany({
       where: {
@@ -167,14 +201,8 @@ export default async function rackRoutes(app: FastifyInstance) {
         for (const [index, slot] of kept.entries()) {
           await tx.slot.update({ where: { id: slot.id }, data: { number: -1 - index } })
         }
-        const generated = new Map(
-          generateSlots(next.rows, next.cols, next.numbering, next.startNumber).map((s) => [
-            `${s.row}:${s.col}`,
-            s.number,
-          ]),
-        )
         for (const slot of kept) {
-          const number = generated.get(`${slot.row}:${slot.col}`)
+          const number = generatedByPosition.get(`${slot.row}:${slot.col}`)
           if (number !== undefined) {
             await tx.slot.update({ where: { id: slot.id }, data: { number } })
           }
@@ -182,8 +210,57 @@ export default async function rackRoutes(app: FastifyInstance) {
       }
 
       if (toCreate.length > 0) {
-        await tx.slot.createMany({ data: toCreate.map((s) => ({ ...s, rackId: id })) })
+        const positionsToCreate = new Set(toCreate.map((slot) => `${slot.row}:${slot.col}`))
+        const createdSlots = renumbered
+          ? generateSlots(next.rows, next.cols, next.numbering, next.startNumber).filter(
+              (generated) => positionsToCreate.has(`${generated.row}:${generated.col}`),
+            )
+          : toCreate
+        await tx.slot.createMany({ data: createdSlots.map((s) => ({ ...s, rackId: id })) })
       }
+    })
+
+    return { ok: true }
+  })
+
+  app.patch('/:id/renumber', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const parsed = renumberRackSchema.safeParse(req.body)
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'Requête invalide', issues: parsed.error.issues })
+    }
+
+    const rack = await prisma.rack.findFirst({ where: { id, ownerId: req.currentUser!.id } })
+    if (!rack) return reply.code(404).send({ error: 'Casier introuvable' })
+
+    const slots = await prisma.slot.findMany({
+      where: { rackId: id },
+      select: { id: true, number: true, row: true, col: true },
+    })
+
+    let numbered
+    try {
+      numbered = renumberByRow(
+        slots,
+        rack.rows,
+        rack.numbering as 'ROW_MAJOR' | 'COL_MAJOR',
+        parsed.data.startNumbers,
+      )
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message })
+    }
+
+    await prisma.$transaction(async (tx) => {
+      for (const [index, slot] of numbered.entries()) {
+        await tx.slot.update({ where: { id: slot.id }, data: { number: -1 - index } })
+      }
+      for (const slot of numbered) {
+        await tx.slot.update({ where: { id: slot.id }, data: { number: slot.number } })
+      }
+      await tx.rack.update({
+        where: { id },
+        data: { startNumber: parsed.data.startNumbers[0] ?? rack.startNumber },
+      })
     })
 
     return { ok: true }
@@ -196,14 +273,16 @@ export default async function rackRoutes(app: FastifyInstance) {
    * un cas légitime. Le numéro est une étiquette libre, seule l'unicité dans le casier est
    * imposée — par la contrainte `@@unique([rackId, number])`, qu'on laisse parler.
    */
-  app.patch('/:rackId/slots/:slotId', { preHandler: app.requireAdmin }, async (req, reply) => {
+  app.patch('/:rackId/slots/:slotId', async (req, reply) => {
     const { rackId, slotId } = req.params as { rackId: string; slotId: string }
     const parsed = updateSlotNumberSchema.safeParse(req.body)
     if (!parsed.success) {
       return reply.code(400).send({ error: 'Requête invalide', issues: parsed.error.issues })
     }
 
-    const slot = await prisma.slot.findFirst({ where: { id: slotId, rackId } })
+    const slot = await prisma.slot.findFirst({
+      where: { id: slotId, rackId, rack: { ownerId: req.currentUser!.id } },
+    })
     if (!slot) return reply.code(404).send({ error: 'Emplacement introuvable' })
 
     try {
@@ -222,8 +301,11 @@ export default async function rackRoutes(app: FastifyInstance) {
     }
   })
 
-  app.delete('/:id', { preHandler: app.requireAdmin }, async (req, reply) => {
+  app.delete('/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
+
+    const rack = await prisma.rack.findFirst({ where: { id, ownerId: req.currentUser!.id } })
+    if (!rack) return reply.code(404).send({ error: 'Casier introuvable' })
 
     const occupied = await prisma.bottle.count({
       where: { status: 'IN_CELLAR', slot: { rackId: id } },

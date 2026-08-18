@@ -103,15 +103,17 @@ function oneLocationCell(value: string): string {
  * sur les vins, pas sur les bouteilles : un carton ne doit jamais perdre cinq emplacements
  * simplement parce que ses exemplaires occupent le plafond de contexte.
  */
-async function buildCellarContext(): Promise<{ lines: string[]; index: Map<string, CellarWine> }> {
+async function buildCellarContext(
+  ownerId: string,
+): Promise<{ lines: string[]; index: Map<string, CellarWine> }> {
   const wines = await prisma.wine.findMany({
-    where: { bottles: { some: { status: 'IN_CELLAR' } } },
+    where: { bottles: { some: { status: 'IN_CELLAR', ownerId } } },
     take: config.AI_MAX_CONTEXT_WINES,
     orderBy: { updatedAt: 'desc' },
     include: {
       foodTags: { include: { foodTag: true } },
       bottles: {
-        where: { status: 'IN_CELLAR' },
+        where: { status: 'IN_CELLAR', ownerId },
         orderBy: { addedAt: 'desc' },
         include: { slot: { include: { rack: true } } },
       },
@@ -208,11 +210,15 @@ async function reserveQuery(userId: string, prompt: string) {
   }
 }
 
-export async function askSommelier(userId: string, prompt: string): Promise<SommelierResponse> {
+export async function askSommelier(
+  userId: string,
+  prompt: string,
+  ownerId = userId,
+): Promise<SommelierResponse> {
   const query = await reserveQuery(userId, prompt)
 
   try {
-    const { lines, index } = await buildCellarContext()
+    const { lines, index } = await buildCellarContext(ownerId)
 
     if (lines.length === 0) {
       // Rien en cave : inutile de dépenser un appel. On rembourse le crédit.

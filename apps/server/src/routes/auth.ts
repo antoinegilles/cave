@@ -1,6 +1,7 @@
 import { changePasswordSchema, loginSchema, registerSchema } from '@cave/shared'
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
+import { defaultCellarCreate } from '../lib/defaultCellar.js'
 import { hashPassword, verifyPassword } from '../lib/password.js'
 import { prisma } from '../lib/prisma.js'
 import { REFRESH_COOKIE, hashToken, refreshCookieOptions } from '../plugins/auth.js'
@@ -44,14 +45,18 @@ export default async function authRoutes(app: FastifyInstance) {
       // n'aurait personne pour configurer les casiers ni piloter les flags.
       const isFirstUser = (await prisma.user.count()) === 0
 
-      const user = await prisma.user.create({
-        data: {
-          email,
-          name: parsed.data.name.trim(),
-          role: isFirstUser ? 'ADMIN' : 'USER',
-          passwordHash: await hashPassword(parsed.data.password),
-        },
-      })
+      const passwordHash = await hashPassword(parsed.data.password)
+      const user = await prisma.$transaction((tx) =>
+        tx.user.create({
+          data: {
+            email,
+            name: parsed.data.name.trim(),
+            role: isFirstUser ? 'ADMIN' : 'USER',
+            passwordHash,
+            racks: { create: defaultCellarCreate() },
+          },
+        }),
+      )
 
       // On connecte directement : demander de se reconnecter juste après s'être
       // inscrit n'apporte rien et fait perdre du monde en route.

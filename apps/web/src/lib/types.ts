@@ -75,7 +75,9 @@ export interface SlotView {
   number: number
   row: number
   col: number
-  bottle: BottleView | null
+  bottles: BottleView[]
+  /** Compatibilité transitoire avec une réponse serveur antérieure. */
+  bottle?: BottleView | null
 }
 
 export interface RackView {

@@ -1,90 +1,63 @@
 <script setup lang="ts">
-import { computed } from 'vue'
 import BottomSheet from './BottomSheet.vue'
 import { decimalFr } from '../lib/format'
 import type { SlotView } from '../lib/types'
 
-/**
- * Aperçu d'un emplacement, au doigt.
- *
- * Sur le plan du casier, toute la richesse d'un vin — domaine, millésime, note, région,
- * accords — était branchée sur le survol : elle n'existait donc pas sur téléphone, et un
- * appui quittait l'écran sans rien montrer. Cette feuille rend au doigt ce que la souris
- * obtenait déjà, avant de décider d'ouvrir la fiche.
- */
-
-const props = defineProps<{
+defineProps<{
   slot: SlotView | null
   rackName: string
-  /** Affiche le casier d'origine quand la cave en compte plusieurs. */
   showRack: boolean
+  readOnly?: boolean
 }>()
 
 defineEmits<{ close: []; open: [bottleId: string]; fill: [slotNumber: number] }>()
-
-const wine = computed(() => props.slot?.bottle?.wine ?? null)
-
-const title = computed(() => {
-  if (!props.slot) return ''
-  return wine.value ? wine.value.name : `Emplacement n° ${props.slot.number}`
-})
-
-const subtitle = computed(() => {
-  if (!wine.value) return null
-  return [wine.value.producer, wine.value.vintage].filter(Boolean).join(' · ') || null
-})
 </script>
 
 <template>
-  <BottomSheet :open="slot !== null" :title="title" @close="$emit('close')">
+  <BottomSheet
+    :open="slot !== null"
+    :title="slot ? `Emplacement n° ${slot.number}` : ''"
+    @close="$emit('close')"
+  >
     <div v-if="slot" class="space-y-3">
-      <p v-if="showRack" class="text-sm text-faint">
-        Casier {{ rackName }} · emplacement n° {{ slot.number }}
-      </p>
+      <p v-if="showRack" class="text-sm text-faint">Casier {{ rackName }}</p>
 
-      <template v-if="wine">
-        <div class="flex items-start justify-between gap-3">
-          <p v-if="subtitle" class="min-w-0 text-muted">{{ subtitle }}</p>
-          <span
-            v-if="wine.vivinoRating"
-            class="shrink-0 rounded-lg bg-surface-2 px-2 py-1 font-bold text-brass"
+      <p v-if="slot.bottles.length === 0" class="text-muted">Cet emplacement est libre.</p>
+      <ul v-else class="space-y-2" :aria-label="`${slot.bottles.length} bouteilles présentes`">
+        <li
+          v-for="bottle in slot.bottles"
+          :key="bottle.id"
+          class="rounded-xl border border-line bg-surface-2 p-3"
+        >
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <p class="truncate font-semibold text-text">{{ bottle.wine.name }}</p>
+              <p class="truncate text-sm text-muted">
+                {{ [bottle.wine.producer, bottle.wine.vintage].filter(Boolean).join(' · ') }}
+              </p>
+            </div>
+            <span v-if="bottle.wine.vivinoRating" class="shrink-0 text-sm font-bold text-brass">
+              ★ {{ decimalFr(bottle.wine.vivinoRating) }}
+            </span>
+          </div>
+          <button
+            type="button"
+            class="mt-2 min-h-11 w-full rounded-lg border border-line px-3 text-sm font-medium text-accent hover:bg-surface-hover"
+            @click="$emit('open', bottle.id)"
           >
-            ★ {{ decimalFr(wine.vivinoRating) }}
-          </span>
-        </div>
-
-        <p v-if="wine.region" class="text-sm text-faint">{{ wine.region }}</p>
-
-        <div v-if="wine.foodTags.length" class="flex flex-wrap gap-1.5">
-          <span
-            v-for="food in wine.foodTags"
-            :key="food.slug"
-            class="rounded-full bg-surface-2 px-2.5 py-1 text-sm text-muted"
-          >
-            {{ food.emoji }} {{ food.labelFr }}
-          </span>
-        </div>
-      </template>
-
-      <p v-else class="text-muted">Cet emplacement est libre.</p>
+            Voir la fiche
+          </button>
+        </li>
+      </ul>
     </div>
 
-    <template #actions>
+    <template v-if="slot && !readOnly" #actions>
       <button
-        v-if="slot?.bottle"
-        type="button"
-        class="min-h-11 w-full rounded-xl bg-accent font-semibold text-accent-text transition-colors hover:bg-accent-hover"
-        @click="$emit('open', slot.bottle.id)"
-      >
-        Voir la fiche
-      </button>
-      <button
-        v-else-if="slot"
         type="button"
         class="min-h-11 w-full rounded-xl bg-accent font-semibold text-accent-text transition-colors hover:bg-accent-hover"
         @click="$emit('fill', slot.number)"
       >
-        Ranger une bouteille ici
+        {{ slot.bottles.length > 0 ? 'Ajouter une bouteille ici' : 'Ranger une bouteille ici' }}
       </button>
     </template>
   </BottomSheet>

@@ -44,7 +44,7 @@ watch(
 
 /** Toutes les bouteilles en cave, tous casiers confondus. */
 const allBottles = computed(() =>
-  cellar.racks.flatMap((rack) => rack.slots.map((slot) => slot.bottle).filter((b) => b !== null)),
+  cellar.racks.flatMap((rack) => rack.slots.flatMap((slot) => slot.bottles)),
 )
 const totalWines = computed(() => new Set(allBottles.value.map((bottle) => bottle.wine.id)).size)
 
@@ -69,7 +69,9 @@ const highlightedNumbers = computed(() => {
   return numbers
 })
 
-const filledCount = computed(() => cellar.activeRack?.slots.filter((s) => s.bottle).length ?? 0)
+const filledCount = computed(
+  () => cellar.activeRack?.slots.filter((slot) => slot.bottles.length > 0).length ?? 0,
+)
 
 /** Emplacement à amener sous les yeux, s'il concerne bien le casier affiché. */
 const focusNumber = computed(() =>
@@ -101,14 +103,18 @@ watch(
  * ne les a jamais eus.
  */
 function onSelectBottle(slot: SlotView): void {
-  if (hoverPointer.value && slot.bottle) {
-    router.push({ name: 'bottle', params: { id: slot.bottle.id } })
+  if (hoverPointer.value && slot.bottles.length === 1) {
+    router.push({ name: 'bottle', params: { id: slot.bottles[0]!.id } })
     return
   }
   sheetSlot.value = slot
 }
 
 function onSelectEmpty(slot: SlotView): void {
+  if (cellar.isReadOnly) {
+    sheetSlot.value = slot
+    return
+  }
   if (hoverPointer.value) {
     goToAdd(slot.number)
     return
@@ -117,6 +123,7 @@ function onSelectEmpty(slot: SlotView): void {
 }
 
 function goToAdd(slotNumber: number): void {
+  if (cellar.isReadOnly) return
   sheetSlot.value = null
   router.push({
     name: 'add',
@@ -152,7 +159,8 @@ function openBottle(bottleId: string): void {
         Crée d'abord un casier qui reflète ta cave physique, avec ses rangées et ses colonnes.
       </p>
       <RouterLink
-        :to="{ name: 'admin' }"
+        v-if="!cellar.isReadOnly"
+        :to="{ name: 'rack-settings' }"
         class="mt-5 inline-block rounded-xl bg-accent px-6 py-3 font-semibold text-accent-text"
       >
         Configurer un casier
@@ -235,6 +243,7 @@ function openBottle(bottleId: string): void {
           :slot="sheetSlot"
           :rack-name="cellar.activeRack?.name ?? ''"
           :show-rack="cellar.racks.length > 1"
+          :read-only="cellar.isReadOnly"
           @close="sheetSlot = null"
           @open="openBottle"
           @fill="goToAdd"

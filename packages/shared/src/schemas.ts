@@ -100,7 +100,7 @@ export const changePasswordSchema = z.object({
  */
 export const MAX_RACK_SIDE = 200
 export const MAX_RACK_SLOTS = 10_000
-export const MAX_SLOT_NUMBER = 999_999
+export const MAX_SLOT_NUMBER = 2_147_483_647
 /** Un ajout en lot reste volontairement borné pour protéger l'API et l'interface. */
 export const MAX_BOTTLES_PER_ADD = 100
 /** Même garde-fou pour une ouverture atomique : au-delà, le geste devient accidentogène. */
@@ -122,17 +122,33 @@ const rackShape = {
 
 /** `rows × cols` ne doit jamais dépasser le plafond global, quelle que soit la forme. */
 function withSlotCap<T extends z.ZodTypeAny>(schema: T) {
-  return schema.refine(
-    (value) => {
-      const { rows, cols } = value as { rows?: number; cols?: number }
-      if (rows === undefined || cols === undefined) return true
-      return rows * cols <= MAX_RACK_SLOTS
-    },
-    {
-      message: `Un casier ne peut pas dépasser ${MAX_RACK_SLOTS.toLocaleString('fr-FR')} emplacements.`,
-      path: ['cols'],
-    },
-  )
+  return schema
+    .refine(
+      (value) => {
+        const { rows, cols } = value as { rows?: number; cols?: number }
+        if (rows === undefined || cols === undefined) return true
+        return rows * cols <= MAX_RACK_SLOTS
+      },
+      {
+        message: `Un casier ne peut pas dépasser ${MAX_RACK_SLOTS.toLocaleString('fr-FR')} emplacements.`,
+        path: ['cols'],
+      },
+    )
+    .refine(
+      (value) => {
+        const { rows, cols, startNumber } = value as {
+          rows?: number
+          cols?: number
+          startNumber?: number
+        }
+        if (rows === undefined || cols === undefined || startNumber === undefined) return true
+        return startNumber + rows * cols - 1 <= MAX_SLOT_NUMBER
+      },
+      {
+        message: `La numérotation dépasserait ${MAX_SLOT_NUMBER.toLocaleString('fr-FR')}.`,
+        path: ['startNumber'],
+      },
+    )
 }
 
 export const createRackSchema = withSlotCap(z.object(rackShape))
@@ -153,6 +169,14 @@ export const updateSlotNumberSchema = z.object({
   ),
 })
 export type UpdateSlotNumberInput = z.infer<typeof updateSlotNumberSchema>
+
+export const renumberRackSchema = z.object({
+  startNumbers: z
+    .array(z.number().int().min(0).max(MAX_SLOT_NUMBER))
+    .min(1, 'Indique le début de chaque rangée.')
+    .max(MAX_RACK_SIDE),
+})
+export type RenumberRackInput = z.infer<typeof renumberRackSchema>
 
 /* ------------------------------------------------------------------ wine */
 
@@ -224,10 +248,45 @@ const bottleSlotNumberSchema = requiredNumber('Indique le numéro d’emplacemen
     ),
 )
 
+export const bottlePlacementSchema = z.object({
+  rackId: z.string().min(1),
+  slotNumber: bottleSlotNumberSchema,
+  quantity: z.number().int().min(1).max(MAX_BOTTLES_PER_ADD).default(1),
+})
+export type BottlePlacementInput = z.infer<typeof bottlePlacementSchema>
+
+const bottlePlacementsSchema = z
+  .array(bottlePlacementSchema)
+  .min(1, 'Indique au moins un emplacement.')
+  .max(MAX_BOTTLES_PER_ADD)
+
+function validatePlacements(
+  placements: BottlePlacementInput[],
+  ctx: z.RefinementCtx,
+  path: (string | number)[] = ['placements'],
+): void {
+  const total = placements.reduce((sum, placement) => sum + placement.quantity, 0)
+  if (total > MAX_BOTTLES_PER_ADD) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path,
+      message: `Tu peux ajouter au maximum ${MAX_BOTTLES_PER_ADD} bouteilles à la fois.`,
+    })
+  }
+  const keys = placements.map((placement) => `${placement.rackId}:${placement.slotNumber}`)
+  if (new Set(keys).size !== keys.length) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path,
+      message: 'Un même emplacement ne peut apparaître qu’une fois.',
+    })
+  }
+}
+
 export const createBottleSchema = z
   .object({
     wine: wineDataSchema,
-    rackId: z.string().min(1),
+    rackId: z.string().min(1).optional(),
     /** Contrat historique, conservé pour les anciens clients. */
     slotNumber: bottleSlotNumberSchema.optional(),
     /** Contrat d'ajout en lot : tous les emplacements appartiennent au même casier. */
@@ -241,6 +300,7 @@ export const createBottleSchema = z
         `Tu peux ajouter au maximum ${MAX_BOTTLES_PER_ADD} bouteilles à la fois.`,
       )
       .optional(),
+    placements: bottlePlacementsSchema.optional(),
     personalNote: z.string().max(2000).nullable().default(null),
     purchasePrice: optionalNumber(z.number().min(0).max(100000)).default(null),
     labelPhotoPath: z.string().max(300).nullable().default(null),
@@ -248,12 +308,14 @@ export const createBottleSchema = z
   .superRefine((data, ctx) => {
     const hasSingle = data.slotNumber !== undefined
     const hasMany = data.slotNumbers !== undefined
+    const hasLegacy = hasSingle || hasMany || data.rackId !== undefined
+    const hasPlacements = data.placements !== undefined
 
-    if (hasSingle === hasMany) {
+    if (hasLegacy === hasPlacements || (hasLegacy && (!data.rackId || hasSingle === hasMany))) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: hasMany ? ['slotNumbers'] : ['slotNumber'],
-        message: 'Indique soit un emplacement, soit une liste d’emplacements.',
+        path: hasPlacements ? ['placements'] : hasMany ? ['slotNumbers'] : ['slotNumber'],
+        message: 'Indique soit un placement, soit un casier avec un ou plusieurs emplacements.',
       })
     }
 
@@ -264,8 +326,14 @@ export const createBottleSchema = z
         message: 'Un même emplacement ne peut être sélectionné qu’une fois.',
       })
     }
+    if (data.placements) validatePlacements(data.placements, ctx)
   })
 export type CreateBottleInput = z.infer<typeof createBottleSchema>
+
+export const addBottleCopiesSchema = z
+  .object({ placements: bottlePlacementsSchema })
+  .superRefine((data, ctx) => validatePlacements(data.placements, ctx))
+export type AddBottleCopiesInput = z.infer<typeof addBottleCopiesSchema>
 
 export const updateBottleSchema = z.object({
   personalNote: z.string().max(2000).nullable().optional(),

@@ -22,9 +22,38 @@ export const usePwaStore = defineStore('pwa', () => {
   const updateAvailable = ref(false)
   const updating = ref(false)
   const registrationError = ref(false)
+  const installOfferVisible = ref(false)
 
   let installPrompt: BeforeInstallPromptEvent | null = null
   let updateServiceWorker: ((reloadPage?: boolean) => Promise<void>) | null = null
+
+  const INSTALL_REMINDER_KEY = 'cave-install-reminder-at'
+  const INSTALL_REMINDER_DELAY = 7 * 86_400_000
+
+  function reminderExpired(): boolean {
+    try {
+      const storage = (window as Window & { localStorage?: Storage }).localStorage
+      if (!storage) return true
+      const stored = Number(storage.getItem(INSTALL_REMINDER_KEY) ?? 0)
+      return !Number.isFinite(stored) || stored <= Date.now()
+    } catch {
+      return true
+    }
+  }
+
+  function offerInstallation(): void {
+    if (canInstall.value && reminderExpired()) installOfferVisible.value = true
+  }
+
+  function dismissInstallOffer(): void {
+    installOfferVisible.value = false
+    try {
+      const storage = (window as Window & { localStorage?: Storage }).localStorage
+      storage?.setItem(INSTALL_REMINDER_KEY, String(Date.now() + INSTALL_REMINDER_DELAY))
+    } catch {
+      // Le report reste limité à cette session si le stockage est refusé.
+    }
+  }
 
   const needsIosInstructions = computed(
     () => isIos.value && !isStandalone.value && !nativeInstallAvailable.value,
@@ -54,6 +83,7 @@ export const usePwaStore = defineStore('pwa', () => {
       isOnline.value = navigator.onLine && reachable
     })
     refreshEnvironment()
+    offerInstallation()
 
     window.addEventListener('online', () => {
       isOnline.value = true
@@ -65,11 +95,19 @@ export const usePwaStore = defineStore('pwa', () => {
       event.preventDefault()
       installPrompt = event as BeforeInstallPromptEvent
       nativeInstallAvailable.value = true
+      offerInstallation()
     })
     window.addEventListener('appinstalled', () => {
       installPrompt = null
       nativeInstallAvailable.value = false
       isStandalone.value = true
+      installOfferVisible.value = false
+      try {
+        const storage = (window as Window & { localStorage?: Storage }).localStorage
+        storage?.removeItem(INSTALL_REMINDER_KEY)
+      } catch {
+        // L'installation est déjà terminée, aucun nettoyage n'est indispensable.
+      }
     })
     const displayMode = window.matchMedia('(display-mode: standalone)')
     if (typeof displayMode.addEventListener === 'function') {
@@ -103,6 +141,7 @@ export const usePwaStore = defineStore('pwa', () => {
     const { outcome } = await prompt.userChoice
     installPrompt = null
     nativeInstallAvailable.value = false
+    installOfferVisible.value = false
     return outcome === 'accepted'
   }
 
@@ -131,8 +170,10 @@ export const usePwaStore = defineStore('pwa', () => {
     updateAvailable,
     updating,
     registrationError,
+    installOfferVisible,
     initialize,
     promptInstall,
+    dismissInstallOffer,
     applyUpdate,
     dismissUpdate,
   }

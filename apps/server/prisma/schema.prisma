@@ -20,6 +20,7 @@ model User {
   createdAt    DateTime  @default(now())
   lastLoginAt  DateTime?
 
+  racks     Rack[]
   bottles   Bottle[]
   aiQueries AiQuery[]
   sessions  Session[]
@@ -43,6 +44,7 @@ model Session {
 /// Un casier physique. Les slots sont générés à la création et régénérés en cas de resize.
 model Rack {
   id          String   @id @default(cuid())
+  ownerId     String
   name        String
   rows        Int
   cols        Int
@@ -51,7 +53,10 @@ model Rack {
   position    Int      @default(0)
   createdAt   DateTime @default(now())
 
+  owner User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   slots Slot[]
+
+  @@index([ownerId])
 }
 
 model Slot {
@@ -138,7 +143,7 @@ model Bottle {
   wineId         String
   slotId         String?
   status         String    @default("IN_CELLAR") // IN_CELLAR | DRUNK
-  addedById      String
+  ownerId        String
   addedAt        DateTime  @default(now())
   drunkAt        DateTime?
   personalNote   String?
@@ -148,10 +153,11 @@ model Bottle {
 
   wine    Wine  @relation(fields: [wineId], references: [id], onDelete: Restrict)
   slot    Slot? @relation(fields: [slotId], references: [id], onDelete: SetNull)
-  addedBy User  @relation(fields: [addedById], references: [id], onDelete: Restrict)
+  owner   User  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
 
   @@index([wineId])
   @@index([slotId])
+  @@index([ownerId])
   @@index([status])
 }
 

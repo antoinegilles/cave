@@ -1,6 +1,8 @@
 import { nextTick } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
+import { api } from './lib/api'
 import { useAuthStore } from './stores/auth'
+import { useCellarStore } from './stores/cellar'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -8,10 +10,11 @@ const router = createRouter({
     { path: '/login', name: 'login', component: () => import('./views/LoginView.vue'), meta: { public: true } },
     { path: '/inscription', name: 'register', component: () => import('./views/RegisterView.vue'), meta: { public: true } },
     { path: '/', name: 'cellar', component: () => import('./views/CellarView.vue') },
-    { path: '/add', name: 'add', component: () => import('./views/AddBottleView.vue') },
+    { path: '/add', name: 'add', component: () => import('./views/AddBottleView.vue'), meta: { write: true } },
     { path: '/bottle/:id', name: 'bottle', component: () => import('./views/BottleView.vue') },
     { path: '/history', name: 'history', component: () => import('./views/HistoryView.vue') },
     { path: '/stats', name: 'stats', component: () => import('./views/StatsView.vue') },
+    { path: '/ma-cave/reglages', name: 'rack-settings', component: () => import('./views/RackSettings.vue'), meta: { write: true } },
     { path: '/admin', name: 'admin', component: () => import('./views/AdminView.vue'), meta: { admin: true } },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
@@ -33,8 +36,9 @@ const router = createRouter({
   },
 })
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const auth = useAuthStore()
+  const cellar = useCellarStore()
 
   if (!to.meta['public'] && !auth.isAuthenticated) {
     return { name: 'login', query: { redirect: to.fullPath } }
@@ -45,6 +49,31 @@ router.beforeEach((to) => {
   if (to.meta['admin'] && !auth.isAdmin) {
     return { name: 'cellar' }
   }
+
+  const requestedOwner = to.query['asUser']
+  if (typeof requestedOwner === 'string') {
+    if (!auth.isAdmin) return { name: 'cellar' }
+
+    if (requestedOwner === auth.user?.id) {
+      cellar.stopViewing()
+    } else if (cellar.viewingUser?.id !== requestedOwner) {
+      try {
+        const { users } = await api.get<{ users: { id: string; name: string }[] }>(
+          '/api/admin/users',
+        )
+        const target = users.find((user) => user.id === requestedOwner)
+        if (!target) {
+          cellar.stopViewing()
+          return { name: 'admin' }
+        }
+        cellar.startViewing(target)
+      } catch {
+        cellar.stopViewing()
+        return { name: 'admin' }
+      }
+    }
+  }
+  if (to.meta['write'] && cellar.isReadOnly) return { name: 'cellar' }
   return true
 })
 

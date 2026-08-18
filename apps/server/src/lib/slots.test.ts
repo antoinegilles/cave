@@ -1,6 +1,13 @@
+import { MAX_SLOT_NUMBER } from '@cave/shared'
 import { describe, expect, it } from 'vitest'
 import { buildDedupeKey, normalizeForDedupe } from './dedupe.js'
-import { formatSlotNumber, generateSlots, reconcileSlots, shouldPadSlots } from './slots.js'
+import {
+  formatSlotNumber,
+  generateSlots,
+  reconcileSlots,
+  renumberByRow,
+  shouldPadSlots,
+} from './slots.js'
 
 describe('generateSlots', () => {
   it('génère un emplacement par case', () => {
@@ -121,6 +128,40 @@ describe('reconcileSlots', () => {
     const { toCreate, toDelete } = reconcileSlots(customRack(), 2, 3, 'ROW_MAJOR', 1)
     expect(toCreate).toEqual([])
     expect(toDelete).toEqual([])
+  })
+
+  it('refuse de dépasser la borne Int32 pour résoudre une collision', () => {
+    const existing = [
+      { id: 'slot-max', row: 0, col: 0, number: MAX_SLOT_NUMBER },
+      { id: 'slot-three', row: 0, col: 1, number: 3 },
+    ]
+
+    expect(() => reconcileSlots(existing, 1, 3, 'ROW_MAJOR', 1)).toThrow(
+      'Aucun numéro libre',
+    )
+  })
+})
+
+describe('renumberByRow', () => {
+  const slots = generateSlots(2, 3, 'ROW_MAJOR', 1).map((slot, index) => ({
+    ...slot,
+    id: `slot-${index}`,
+  }))
+
+  it('applique un départ indépendant à chaque rangée', () => {
+    expect(renumberByRow(slots, 2, 'ROW_MAJOR', [1001, 4020]).map((slot) => slot.number)).toEqual([
+      1001, 1002, 1003, 4020, 4021, 4022,
+    ])
+  })
+
+  it('respecte le pas de la numérotation par colonne', () => {
+    expect(renumberByRow(slots, 2, 'COL_MAJOR', [1001, 4020]).map((slot) => slot.number)).toEqual([
+      1001, 1003, 1005, 4020, 4022, 4024,
+    ])
+  })
+
+  it('refuse les doublons entre rangées', () => {
+    expect(() => renumberByRow(slots, 2, 'ROW_MAJOR', [1001, 1003])).toThrow('double')
   })
 })
 

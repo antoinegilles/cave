@@ -4,16 +4,60 @@ import {
   MAX_BOTTLES_PER_DRINK,
   MAX_RACK_SIDE,
   MAX_SLOT_NUMBER,
+  addBottleCopiesSchema,
   createBottleSchema,
   createRackSchema,
   drinkBottleSchema,
   drinkBottlesSchema,
+  renumberRackSchema,
   sommelierResponseSchema,
   sommelierStatusSchema,
   updateBottleSchema,
   updateSlotNumberSchema,
   wineDataSchema,
 } from './schemas.js'
+
+describe('placements multi-bouteilles', () => {
+  it('accepte plusieurs bouteilles dans le même emplacement', () => {
+    const parsed = createBottleSchema.parse({
+      wine,
+      placements: [{ rackId: 'rack-1', slotNumber: 1001, quantity: 3 }],
+    })
+    expect(parsed.placements?.[0]).toMatchObject({ slotNumber: 1001, quantity: 3 })
+  })
+
+  it('borne la somme des quantités et refuse un placement répété', () => {
+    expect(
+      addBottleCopiesSchema.safeParse({
+        placements: [
+          { rackId: 'rack-1', slotNumber: 1, quantity: MAX_BOTTLES_PER_ADD },
+          { rackId: 'rack-1', slotNumber: 1, quantity: 1 },
+        ],
+      }).success,
+    ).toBe(false)
+  })
+})
+
+describe('renumérotation par rangée', () => {
+  it('accepte les grands numéros dans la borne Int32', () => {
+    expect(renumberRackSchema.parse({ startNumbers: [1001, 4020] }).startNumbers).toEqual([
+      1001, 4020,
+    ])
+    expect(updateSlotNumberSchema.parse({ number: MAX_SLOT_NUMBER }).number).toBe(MAX_SLOT_NUMBER)
+  })
+
+  it('refuse un casier dont la suite dépasserait la borne Int32', () => {
+    expect(
+      createRackSchema.safeParse({
+        name: 'Trop haut',
+        rows: 1,
+        cols: 2,
+        numbering: 'ROW_MAJOR',
+        startNumber: MAX_SLOT_NUMBER,
+      }).success,
+    ).toBe(false)
+  })
+})
 
 /**
  * Régression du bug 400 à l'ajout d'une bouteille.

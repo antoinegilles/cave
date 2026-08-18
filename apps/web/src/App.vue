@@ -19,6 +19,7 @@ import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import BottomSheet from './components/BottomSheet.vue'
 import NotificationHost from './components/NotificationHost.vue'
 import { useAuthStore } from './stores/auth'
+import { useCellarStore } from './stores/cellar'
 import { useNotificationsStore } from './stores/notifications'
 import { usePrefsStore } from './stores/prefs'
 import { usePwaStore } from './stores/pwa'
@@ -37,6 +38,7 @@ import { usePwaStore } from './stores/pwa'
  */
 
 const auth = useAuthStore()
+const cellar = useCellarStore()
 const notifications = useNotificationsStore()
 const prefs = usePrefsStore()
 const pwa = usePwaStore()
@@ -87,6 +89,25 @@ const menuRef = ref<HTMLElement | null>(null)
 const menuButton = ref<HTMLButtonElement | null>(null)
 const menuPanel = ref<HTMLElement | null>(null)
 const iosInstallHelpOpen = ref(false)
+
+// Les données Pinia vivent tant que l'onglet reste ouvert. Un changement de session doit
+// donc purger la cave avant que le nouveau compte ne monte sa vue.
+let signedInUserId = auth.user?.id ?? null
+watch(
+  () => auth.user?.id ?? null,
+  (currentUserId) => {
+    if (currentUserId === signedInUserId) return
+    signedInUserId = currentUserId
+    cellar.reset()
+  },
+  { flush: 'sync' },
+)
+
+async function leaveViewedCellar(): Promise<void> {
+  cellar.stopViewing()
+  await router.push({ name: 'cellar' })
+  await cellar.loadRacks()
+}
 
 function onDocumentClick(event: MouseEvent): void {
   if (menuOpen.value && menuRef.value && !menuRef.value.contains(event.target as Node)) {
@@ -152,12 +173,14 @@ watch(
 
 async function logout(): Promise<void> {
   menuOpen.value = false
+  cellar.reset()
   await auth.logout()
   router.push({ name: 'login' })
 }
 
 async function installApplication(): Promise<void> {
   menuOpen.value = false
+  if (pwa.installOfferVisible) pwa.dismissInstallOffer()
   if (pwa.needsIosInstructions) {
     iosInstallHelpOpen.value = true
     return
@@ -215,6 +238,7 @@ async function updateApplication(): Promise<void> {
         <div class="ml-auto flex items-center gap-2">
           <!-- Action principale, toujours visible sur bureau -->
           <RouterLink
+            v-if="!cellar.isReadOnly"
             :to="{ name: 'add' }"
             class="hidden items-center gap-2 rounded-xl bg-accent px-3 py-2.5 font-semibold text-accent-text transition-colors hover:bg-accent-hover md:flex lg:px-4"
             aria-label="Ajouter une bouteille"
@@ -281,6 +305,16 @@ async function updateApplication(): Promise<void> {
               </button>
 
               <RouterLink
+                v-if="!cellar.isReadOnly"
+                :to="{ name: 'rack-settings' }"
+                role="menuitem"
+                class="flex items-center gap-3 px-4 py-3 text-text transition-colors hover:bg-surface-hover"
+                @click="menuOpen = false"
+              >
+                <Cog6ToothIcon class="h-5 w-5 text-muted" aria-hidden="true" /> Réglages de ma cave
+              </RouterLink>
+
+              <RouterLink
                 v-if="auth.isAdmin"
                 :to="{ name: 'admin' }"
                 role="menuitem"
@@ -303,6 +337,20 @@ async function updateApplication(): Promise<void> {
         </div>
       </div>
     </header>
+
+    <div
+      v-if="showChrome && cellar.viewingUser"
+      class="sticky top-[65px] z-20 border-b border-warning bg-warning-soft px-4 py-2.5 text-warning"
+    >
+      <div class="mx-auto flex max-w-5xl items-center justify-between gap-3">
+        <p class="text-sm font-semibold">
+          Tu consultes la cave de {{ cellar.viewingUser.name }} — lecture seule
+        </p>
+        <button type="button" class="shrink-0 rounded-lg border border-warning px-3 py-1.5 text-sm font-semibold" @click="leaveViewedCellar">
+          Quitter
+        </button>
+      </div>
+    </div>
 
     <div
       v-if="!pwa.isOnline"
@@ -354,7 +402,7 @@ async function updateApplication(): Promise<void> {
     </div>
 
     <main id="contenu" class="mx-auto max-w-5xl px-3 py-5 sm:px-4 sm:py-7" :class="showChrome ? 'pb-28 md:pb-10' : ''">
-      <RouterView />
+      <RouterView :key="`${String(route.name)}:${cellar.viewingUser?.id ?? 'self'}`" />
     </main>
 
     <!-- Barre basse : l'app se manipule debout devant la cave, le pouce en bas de l'écran. -->
@@ -377,6 +425,7 @@ async function updateApplication(): Promise<void> {
 
         <!-- Bouton central surélevé : impossible à manquer -->
         <RouterLink
+          v-if="!cellar.isReadOnly"
           :to="{ name: 'add' }"
           class="-mt-4 flex min-w-16 flex-col items-center rounded-xl px-1"
           aria-label="Ajouter une bouteille"
@@ -402,6 +451,25 @@ async function updateApplication(): Promise<void> {
         </RouterLink>
       </div>
     </nav>
+
+    <BottomSheet
+      :open="pwa.installOfferVisible"
+      title="Installer Cave"
+      @close="pwa.dismissInstallOffer"
+    >
+      <div class="space-y-3 text-text">
+        <p>Installe Cave sur cet appareil pour l’ouvrir comme une application et la retrouver plus facilement.</p>
+        <p v-if="pwa.needsIosInstructions" class="text-sm text-muted">Sur iPhone ou iPad, l’installation passe par le menu Partager de Safari.</p>
+      </div>
+      <template #actions>
+        <div class="flex gap-3">
+          <button type="button" class="rounded-xl border border-line px-4 py-3 font-medium text-muted" @click="pwa.dismissInstallOffer">Plus tard</button>
+          <button type="button" class="flex-1 rounded-xl bg-accent px-4 py-3 font-semibold text-accent-text" @click="installApplication">
+            {{ pwa.needsIosInstructions ? 'Voir les instructions' : 'Installer' }}
+          </button>
+        </div>
+      </template>
+    </BottomSheet>
 
     <BottomSheet
       :open="iosInstallHelpOpen"

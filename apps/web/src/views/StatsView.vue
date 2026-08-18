@@ -3,6 +3,7 @@ import { WINE_COLOR_HEX, WINE_COLOR_LABELS, type WineColor } from '@cave/shared'
 import { computed, onMounted, ref } from 'vue'
 import MeterRow from '../components/MeterRow.vue'
 import { api } from '../lib/api'
+import { useCellarStore } from '../stores/cellar'
 
 interface Stats {
   inCellar: number
@@ -16,10 +17,11 @@ interface Stats {
 
 const stats = ref<Stats | null>(null)
 const loading = ref(true)
+const cellar = useCellarStore()
 
 onMounted(async () => {
   try {
-    stats.value = await api.get<Stats>('/api/stats')
+    stats.value = await api.get<Stats>(cellar.readPath('/api/stats'))
   } finally {
     loading.value = false
   }

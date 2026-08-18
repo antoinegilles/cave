@@ -1,4 +1,4 @@
-import type { RackNumbering } from '@cave/shared'
+import { MAX_SLOT_NUMBER, type RackNumbering } from '@cave/shared'
 
 export interface SlotPosition {
   number: number
@@ -69,6 +69,36 @@ export interface SlotReconciliation {
   toDelete: ExistingSlot[]
 }
 
+export interface RenumberedSlot {
+  id: string
+  number: number
+}
+
+/** Calcule les étiquettes à partir du début propre à chaque rangée. */
+export function renumberByRow(
+  slots: ExistingSlot[],
+  rows: number,
+  numbering: RackNumbering,
+  startNumbers: number[],
+): RenumberedSlot[] {
+  if (startNumbers.length !== rows) {
+    throw new Error(`Indique exactement ${rows} débuts de rangée.`)
+  }
+
+  const step = numbering === 'ROW_MAJOR' ? 1 : rows
+  const result = slots.map((slot) => ({
+    id: slot.id,
+    number: startNumbers[slot.row]! + slot.col * step,
+  }))
+  if (result.some((slot) => slot.number > MAX_SLOT_NUMBER)) {
+    throw new Error(`Un numéro dépasse ${MAX_SLOT_NUMBER.toLocaleString('fr-FR')}.`)
+  }
+  if (new Set(result.map((slot) => slot.number)).size !== result.length) {
+    throw new Error('La renumérotation produirait des numéros en double.')
+  }
+  return result
+}
+
 /**
  * Réconcilie les emplacements d'un casier après un redimensionnement.
  *
@@ -119,6 +149,11 @@ export function reconcileSlots(
     if (taken.has(number)) {
       while (taken.has(nextFree)) nextFree++
       number = nextFree++
+    }
+    if (number > MAX_SLOT_NUMBER) {
+      throw new Error(
+        `Aucun numéro libre inférieur ou égal à ${MAX_SLOT_NUMBER.toLocaleString('fr-FR')}.`,
+      )
     }
     taken.add(number)
     toCreate.push({ ...position, number })

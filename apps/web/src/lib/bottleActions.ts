@@ -26,10 +26,18 @@ function joinFrench(values: string[]): string {
   return `${values.slice(0, -1).join(', ')} et ${values.at(-1)}`
 }
 
-export function formatOpenedNotification(freedSlots: FreedSlotView[]): string {
+export function formatOpenedNotification(
+  freedSlots: FreedSlotView[],
+  openedCount = freedSlots.length,
+): string {
+  if (freedSlots.length === 0) {
+    return openedCount > 1
+      ? `${openedCount} bouteilles ouvertes. Les emplacements contiennent encore des bouteilles.`
+      : 'Bouteille ouverte. L’emplacement contient encore des bouteilles.'
+  }
   const locations = freedSlots.map((slot) => `${slot.rackName} · n° ${slot.slotNumber}`)
   if (freedSlots.length === 1) {
     return `Bouteille ouverte. Emplacement ${locations[0]} libéré.`
   }
-  return `${freedSlots.length} bouteilles ouvertes. Emplacements ${joinFrench(locations)} libérés.`
+  return `${openedCount} bouteilles ouvertes. Emplacements ${joinFrench(locations)} libérés.`
 }

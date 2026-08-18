@@ -4,6 +4,7 @@ import {
   MIN_CELL_PX,
   formatSlotLabel,
   rackLayout,
+  rowLabel,
   rowTopPercent,
   scrollLeftFor,
   slotY,
@@ -72,6 +73,15 @@ describe('slotY / rowTopPercent', () => {
     expect(first).toBeGreaterThan(last)
     expect(first).toBeLessThan(100)
     expect(last).toBeGreaterThan(0)
+  })
+})
+
+describe('rowLabel', () => {
+  it('continue après Z pour les grands casiers', () => {
+    expect(rowLabel(0)).toBe('A')
+    expect(rowLabel(25)).toBe('Z')
+    expect(rowLabel(26)).toBe('AA')
+    expect(rowLabel(199)).toBe('GR')
   })
 })
 

@@ -3,6 +3,28 @@ import { computed, ref } from 'vue'
 import { api } from '../lib/api'
 import type { RackView, SearchResult } from '../lib/types'
 
+export interface ViewingUser {
+  id: string
+  name: string
+}
+
+const VIEWING_USER_KEY = 'cave-viewing-user'
+
+function storedViewingUser(): ViewingUser | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const storage = (window as Window & { sessionStorage?: Storage }).sessionStorage
+    const raw = storage?.getItem(VIEWING_USER_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<ViewingUser>
+    return typeof parsed.id === 'string' && typeof parsed.name === 'string'
+      ? { id: parsed.id, name: parsed.name }
+      : null
+  } catch {
+    return null
+  }
+}
+
 /**
  * État de la cave et de la recherche courante.
  *
@@ -15,6 +37,8 @@ export const useCellarStore = defineStore('cellar', () => {
   const activeRackId = ref<string | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
+  const viewingUser = ref<ViewingUser | null>(storedViewingUser())
+  const isReadOnly = computed(() => viewingUser.value !== null)
 
   const searchActive = ref(false)
   const searchLabel = ref('')
@@ -36,7 +60,10 @@ export const useCellarStore = defineStore('cellar', () => {
   )
 
   const totalBottles = computed(() =>
-    racks.value.reduce((sum, rack) => sum + rack.slots.filter((s) => s.bottle).length, 0),
+    racks.value.reduce(
+      (sum, rack) => sum + rack.slots.reduce((slotSum, slot) => slotSum + slot.bottles.length, 0),
+      0,
+    ),
   )
 
   const totalSlots = computed(() => racks.value.reduce((sum, rack) => sum + rack.slots.length, 0))
@@ -49,12 +76,59 @@ export const useCellarStore = defineStore('cellar', () => {
     return highlightedSlots.value.has(slotKey(rackId, slotNumber))
   }
 
+  function readPath(path: string): string {
+    if (!viewingUser.value) return path
+    const url = new URL(path, window.location.origin)
+    url.searchParams.set('asUser', viewingUser.value.id)
+    return `${url.pathname}${url.search}`
+  }
+
+  function startViewing(user: ViewingUser): void {
+    viewingUser.value = user
+    racks.value = []
+    try {
+      const storage = (window as Window & { sessionStorage?: Storage }).sessionStorage
+      storage?.setItem(VIEWING_USER_KEY, JSON.stringify(user))
+    } catch {
+      // La consultation reste active en mémoire lorsque le stockage est refusé.
+    }
+    clearSearch()
+    activeRackId.value = null
+  }
+
+  function stopViewing(): void {
+    viewingUser.value = null
+    racks.value = []
+    try {
+      const storage = (window as Window & { sessionStorage?: Storage }).sessionStorage
+      storage?.removeItem(VIEWING_USER_KEY)
+    } catch {
+      // Rien à nettoyer lorsque le navigateur refuse le stockage.
+    }
+    clearSearch()
+    activeRackId.value = null
+  }
+
+  /** Efface toutes les données privées avant qu'un autre compte puisse utiliser l'onglet. */
+  function reset(): void {
+    racks.value = []
+    activeRackId.value = null
+    error.value = null
+    stopViewing()
+  }
+
   async function loadRacks(): Promise<void> {
     loading.value = true
     error.value = null
     try {
-      const data = await api.get<{ racks: RackView[] }>('/api/racks')
-      racks.value = data.racks
+      const data = await api.get<{ racks: RackView[] }>(readPath('/api/racks'))
+      racks.value = data.racks.map((rack) => ({
+        ...rack,
+        slots: rack.slots.map((slot) => ({
+          ...slot,
+          bottles: slot.bottles ?? (slot.bottle ? [slot.bottle] : []),
+        })),
+      }))
       if (!activeRackId.value || !data.racks.some((r) => r.id === activeRackId.value)) {
         activeRackId.value = data.racks[0]?.id ?? null
       }
@@ -80,7 +154,7 @@ export const useCellarStore = defineStore('cellar', () => {
     label: string,
   ): Promise<{ result: SearchResult; applied: boolean }> {
     const request = ++searchRequest
-    const result = await api.post<SearchResult>('/api/bottles/search', body)
+    const result = await api.post<SearchResult>(readPath('/api/bottles/search'), body)
     if (request !== searchRequest) return { result, applied: false }
     applyHighlight(
       result.matchedSlots.map((s) => slotKey(s.rackId, s.slotNumber)),
@@ -147,6 +221,8 @@ export const useCellarStore = defineStore('cellar', () => {
     activeRack,
     loading,
     error,
+    viewingUser,
+    isReadOnly,
     searchActive,
     searchLabel,
     searchResult,
@@ -156,6 +232,10 @@ export const useCellarStore = defineStore('cellar', () => {
     totalBottles,
     totalSlots,
     slotKey,
+    readPath,
+    startViewing,
+    stopViewing,
+    reset,
     isHighlighted,
     focusSlot,
     loadRacks,

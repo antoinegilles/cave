@@ -93,12 +93,11 @@ export const changePasswordSchema = z.object({
 /**
  * Bornes d'un casier.
  *
- * Il n'y a volontairement pas de « taille standard » : les caves réelles vont de six
- * alvéoles à un mur entier. La seule limite est celle qui protège la base et le rendu —
- * au-delà, ni SQLite ni un téléphone ne suivent. `MAX_RACK_SLOTS` est la vraie contrainte,
- * `MAX_RACK_SIDE` évite seulement les casiers dégénérés de 1 × 10 000.
+ * Une cave n'est plus un meuble « rangées × colonnes » : on la décrit par un simple
+ * intervalle de numéros, « de X à Y ». La seule limite est celle qui protège la base et le
+ * rendu — au-delà, ni SQLite ni un téléphone ne suivent — d'où `MAX_RACK_SLOTS` sur le
+ * *nombre* d'emplacements, jamais sur la valeur des numéros (bornée seulement par l'entier).
  */
-export const MAX_RACK_SIDE = 200
 export const MAX_RACK_SLOTS = 10_000
 export const MAX_SLOT_NUMBER = 2_147_483_647
 /** Un ajout en lot reste volontairement borné pour protéger l'API et l'interface. */
@@ -106,77 +105,43 @@ export const MAX_BOTTLES_PER_ADD = 100
 /** Même garde-fou pour une ouverture atomique : au-delà, le geste devient accidentogène. */
 export const MAX_BOTTLES_PER_DRINK = 100
 
-const rackShape = {
-  name: z.string().min(1, 'Nom requis').max(60),
-  rows: requiredNumber(`Indique le nombre de rangées (1 à ${MAX_RACK_SIDE}).`)((n) =>
-    n.int().min(1).max(MAX_RACK_SIDE),
-  ),
-  cols: requiredNumber(`Indique le nombre de colonnes (1 à ${MAX_RACK_SIDE}).`)((n) =>
-    n.int().min(1).max(MAX_RACK_SIDE),
-  ),
-  numbering: rackNumberingSchema.default('ROW_MAJOR'),
-  startNumber: requiredNumber('Indique le premier numéro du casier.')((n) =>
-    n.int().min(0).max(MAX_SLOT_NUMBER),
-  ).default(1),
-}
-
-/** `rows × cols` ne doit jamais dépasser le plafond global, quelle que soit la forme. */
-function withSlotCap<T extends z.ZodTypeAny>(schema: T) {
-  return schema
-    .refine(
-      (value) => {
-        const { rows, cols } = value as { rows?: number; cols?: number }
-        if (rows === undefined || cols === undefined) return true
-        return rows * cols <= MAX_RACK_SLOTS
-      },
-      {
-        message: `Un casier ne peut pas dépasser ${MAX_RACK_SLOTS.toLocaleString('fr-FR')} emplacements.`,
-        path: ['cols'],
-      },
-    )
-    .refine(
-      (value) => {
-        const { rows, cols, startNumber } = value as {
-          rows?: number
-          cols?: number
-          startNumber?: number
-        }
-        if (rows === undefined || cols === undefined || startNumber === undefined) return true
-        return startNumber + rows * cols - 1 <= MAX_SLOT_NUMBER
-      },
-      {
-        message: `La numérotation dépasserait ${MAX_SLOT_NUMBER.toLocaleString('fr-FR')}.`,
-        path: ['startNumber'],
-      },
-    )
-}
-
-export const createRackSchema = withSlotCap(z.object(rackShape))
+/**
+ * Une cave = un nom + un intervalle continu `[firstNumber, lastNumber]`.
+ *
+ * Toute la géométrie du plan (rangées, colonnes) se dérive de cet intervalle côté serveur :
+ * l'utilisateur ne saisit que deux nombres. Création et mise à jour partagent le même
+ * contrat — modifier une cave, c'est renvoyer son intervalle, éventuellement resserré.
+ */
+export const createRackSchema = z
+  .object({
+    name: z.string().min(1, 'Nom requis').max(60),
+    firstNumber: requiredNumber('Indique le premier numéro de la cave.')((n) =>
+      n.int().min(0).max(MAX_SLOT_NUMBER),
+    ),
+    lastNumber: requiredNumber('Indique le dernier numéro de la cave.')((n) =>
+      n.int().min(0).max(MAX_SLOT_NUMBER),
+    ),
+  })
+  .superRefine((value, ctx) => {
+    if (value.lastNumber < value.firstNumber) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['lastNumber'],
+        message: 'Le dernier numéro doit être supérieur ou égal au premier.',
+      })
+      return
+    }
+    if (value.lastNumber - value.firstNumber + 1 > MAX_RACK_SLOTS) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['lastNumber'],
+        message: `Une cave ne peut pas dépasser ${MAX_RACK_SLOTS.toLocaleString('fr-FR')} emplacements.`,
+      })
+    }
+  })
 export type CreateRackInput = z.infer<typeof createRackSchema>
 
-export const updateRackSchema = withSlotCap(z.object(rackShape).partial())
-
-/**
- * Renumérotation d'un emplacement.
- *
- * Les numéros n'ont pas à former une suite : un casier de six alvéoles peut très bien être
- * étiqueté 1, 2, 3, 100, 5, 6 si c'est ce qui est écrit sur le meuble. Seule l'unicité au
- * sein du casier est garantie, par la contrainte `@@unique([rackId, number])`.
- */
-export const updateSlotNumberSchema = z.object({
-  number: requiredNumber('Indique un numéro d’emplacement.')((n) =>
-    n.int().min(0).max(MAX_SLOT_NUMBER),
-  ),
-})
-export type UpdateSlotNumberInput = z.infer<typeof updateSlotNumberSchema>
-
-export const renumberRackSchema = z.object({
-  startNumbers: z
-    .array(z.number().int().min(0).max(MAX_SLOT_NUMBER))
-    .min(1, 'Indique le début de chaque rangée.')
-    .max(MAX_RACK_SIDE),
-})
-export type RenumberRackInput = z.infer<typeof renumberRackSchema>
+export const updateRackSchema = createRackSchema
 
 /* ------------------------------------------------------------------ wine */
 
@@ -304,6 +269,8 @@ export const createBottleSchema = z
     personalNote: z.string().max(2000).nullable().default(null),
     purchasePrice: optionalNumber(z.number().min(0).max(100000)).default(null),
     labelPhotoPath: z.string().max(300).nullable().default(null),
+    /** Nom affiché du propriétaire, commun à tout le lot ajouté. Purement descriptif. */
+    ownerLabel: z.string().max(120).nullable().default(null),
   })
   .superRefine((data, ctx) => {
     const hasSingle = data.slotNumber !== undefined
@@ -339,6 +306,7 @@ export const updateBottleSchema = z.object({
   personalNote: z.string().max(2000).nullable().optional(),
   personalRating: optionalNumber(z.number().min(1).max(5)).optional(),
   purchasePrice: optionalNumber(z.number().min(0).max(100000)).optional(),
+  ownerLabel: z.string().max(120).nullable().optional(),
   rackId: z.string().min(1).optional(),
   slotNumber: z.number().int().min(0).max(MAX_SLOT_NUMBER).optional(),
 })

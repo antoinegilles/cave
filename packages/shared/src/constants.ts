@@ -30,6 +30,15 @@ export type WineSource = (typeof WINE_SOURCES)[number]
 export const RACK_NUMBERINGS = ['ROW_MAJOR', 'COL_MAJOR'] as const
 export type RackNumbering = (typeof RACK_NUMBERINGS)[number]
 
+/**
+ * Largeur de la grille auto-générée à partir d'un intervalle.
+ *
+ * La cave se décrit par « de X à Y » ; on dispose ces numéros consécutifs en rangées de
+ * cette largeur pour que le plan reste 2D sans rien demander de plus à l'utilisateur. La
+ * dernière rangée peut être partielle. Une seule source de vérité, front et back.
+ */
+export const RACK_COLUMNS = 10
+
 export const USER_ROLES = ['ADMIN', 'USER'] as const
 export type UserRole = (typeof USER_ROLES)[number]
 

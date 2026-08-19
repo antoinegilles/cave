@@ -48,6 +48,9 @@ const editingTasting = ref(false)
 const editRating = ref<number | null>(null)
 const editNote = ref('')
 const savingTasting = ref(false)
+const editingOwner = ref(false)
+const editOwner = ref('')
+const savingOwner = ref(false)
 const locationOpen = ref(false)
 const locationBottle = ref<Bottle | null>(null)
 const locationRackId = ref('')
@@ -264,6 +267,38 @@ function cancelTastingEdit(): void {
   actionError.value = null
 }
 
+function startOwnerEdit(): void {
+  if (!bottle.value) return
+  editOwner.value = bottle.value.ownerLabel ?? ''
+  actionError.value = null
+  editingOwner.value = true
+}
+
+function cancelOwnerEdit(): void {
+  if (savingOwner.value) return
+  editingOwner.value = false
+  actionError.value = null
+}
+
+/** Le propriétaire vit sur chaque exemplaire : cette édition ne touche que la bouteille affichée. */
+async function saveOwner(): Promise<void> {
+  if (!bottle.value || savingOwner.value) return
+  savingOwner.value = true
+  actionError.value = null
+  try {
+    const result = await api.patch<{ bottle: Bottle }>(`/api/bottles/${bottle.value.id}`, {
+      ownerLabel: editOwner.value.trim() || null,
+    })
+    bottle.value = result.bottle
+    editingOwner.value = false
+    notifications.show('Propriétaire mis à jour.')
+  } catch (e) {
+    actionError.value = (e as Error).message
+  } finally {
+    savingOwner.value = false
+  }
+}
+
 async function saveTasting(): Promise<void> {
   if (!bottle.value || savingTasting.value) return
   savingTasting.value = true
@@ -340,6 +375,32 @@ async function remove(): Promise<void> {
               <div class="min-w-0">
                 <h1 class="font-display text-xl text-text">{{ bottle.wine.name }}</h1>
                 <p v-if="bottle.wine.producer" class="text-muted">{{ bottle.wine.producer }}</p>
+
+                <div v-if="!editingOwner" class="mt-1 flex items-center gap-1.5">
+                  <span class="text-sm italic text-muted">
+                    {{ bottle.ownerLabel || 'Propriétaire non renseigné' }}
+                  </span>
+                  <button
+                    v-if="!cellar.isReadOnly"
+                    type="button"
+                    class="text-muted hover:text-text"
+                    aria-label="Modifier le propriétaire"
+                    @click="startOwnerEdit"
+                  >
+                    <PencilSquareIcon class="h-4 w-4" />
+                  </button>
+                </div>
+                <div v-else class="mt-1 flex items-center gap-2">
+                  <input
+                    v-model="editOwner"
+                    type="text"
+                    placeholder="Propriétaire de la bouteille"
+                    class="min-w-0 flex-1 rounded-lg border border-line bg-bg px-2 py-1 text-sm text-text"
+                    @keyup.enter="saveOwner"
+                  />
+                  <button type="button" class="text-sm font-semibold text-accent disabled:opacity-50" :disabled="savingOwner" @click="saveOwner">OK</button>
+                  <button type="button" class="text-sm text-muted" :disabled="savingOwner" @click="cancelOwnerEdit">Annuler</button>
+                </div>
               </div>
               <span
                 v-if="bottle.slotNumber !== null"

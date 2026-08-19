@@ -45,6 +45,7 @@ export interface BottleView {
   personalRating: number | null
   purchasePrice: number | null
   labelPhotoPath: string | null
+  ownerLabel: string | null
   slotNumber: number | null
   rackId: string | null
   rackName: string | null

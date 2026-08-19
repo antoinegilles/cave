@@ -2,18 +2,16 @@ import { describe, expect, it } from 'vitest'
 import {
   MAX_BOTTLES_PER_ADD,
   MAX_BOTTLES_PER_DRINK,
-  MAX_RACK_SIDE,
+  MAX_RACK_SLOTS,
   MAX_SLOT_NUMBER,
   addBottleCopiesSchema,
   createBottleSchema,
   createRackSchema,
   drinkBottleSchema,
   drinkBottlesSchema,
-  renumberRackSchema,
   sommelierResponseSchema,
   sommelierStatusSchema,
   updateBottleSchema,
-  updateSlotNumberSchema,
   wineDataSchema,
 } from './schemas.js'
 
@@ -38,24 +36,83 @@ describe('placements multi-bouteilles', () => {
   })
 })
 
-describe('renumérotation par rangée', () => {
-  it('accepte les grands numéros dans la borne Int32', () => {
-    expect(renumberRackSchema.parse({ startNumbers: [1001, 4020] }).startNumbers).toEqual([
-      1001, 4020,
-    ])
-    expect(updateSlotNumberSchema.parse({ number: MAX_SLOT_NUMBER }).number).toBe(MAX_SLOT_NUMBER)
+describe('propriétaire de la bouteille', () => {
+  it('conserve le nom du propriétaire et le rend nul par défaut', () => {
+    const named = createBottleSchema.parse({
+      wine,
+      placements: [{ rackId: 'rack-1', slotNumber: 1, quantity: 1 }],
+      ownerLabel: 'Jean Dupont',
+    })
+    expect(named.ownerLabel).toBe('Jean Dupont')
+
+    const absent = createBottleSchema.parse({
+      wine,
+      placements: [{ rackId: 'rack-1', slotNumber: 1, quantity: 1 }],
+    })
+    expect(absent.ownerLabel).toBeNull()
   })
 
-  it('refuse un casier dont la suite dépasserait la borne Int32', () => {
+  it('borne la longueur du nom du propriétaire', () => {
     expect(
-      createRackSchema.safeParse({
-        name: 'Trop haut',
-        rows: 1,
-        cols: 2,
-        numbering: 'ROW_MAJOR',
-        startNumber: MAX_SLOT_NUMBER,
+      createBottleSchema.safeParse({
+        wine,
+        placements: [{ rackId: 'rack-1', slotNumber: 1, quantity: 1 }],
+        ownerLabel: 'x'.repeat(121),
       }).success,
     ).toBe(false)
+  })
+})
+
+describe('createRackSchema — intervalle de la cave', () => {
+  it('accepte un intervalle simple et de grands numéros', () => {
+    const result = createRackSchema.safeParse({ name: 'Salon', firstNumber: 10, lastNumber: 200 })
+    expect(result.success).toBe(true)
+    expect(result.success && result.data).toMatchObject({ firstNumber: 10, lastNumber: 200 })
+  })
+
+  it('accepte une saisie numérique textuelle venue d’un input number', () => {
+    const result = createRackSchema.safeParse({ name: 'Cave', firstNumber: '1', lastNumber: '60' })
+    expect(result.success).toBe(true)
+    expect(result.success && result.data.lastNumber).toBe(60)
+  })
+
+  it('accepte un intervalle d’un seul emplacement', () => {
+    expect(createRackSchema.safeParse({ name: 'Cave', firstNumber: 5, lastNumber: 5 }).success).toBe(
+      true,
+    )
+  })
+
+  it('refuse un dernier numéro inférieur au premier', () => {
+    const result = createRackSchema.safeParse({ name: 'Cave', firstNumber: 200, lastNumber: 10 })
+    expect(result.success).toBe(false)
+    expect(result.success === false && result.error.issues[0]?.message).toContain(
+      'supérieur ou égal au premier',
+    )
+  })
+
+  it('refuse un premier numéro vide avec un message lisible', () => {
+    const result = createRackSchema.safeParse({ name: 'Cave', firstNumber: '', lastNumber: 60 })
+    expect(result.success).toBe(false)
+    expect(result.success === false && result.error.issues[0]?.message).toContain('premier numéro')
+  })
+
+  it('refuse un intervalle au-delà du plafond global', () => {
+    const result = createRackSchema.safeParse({
+      name: 'Mur entier',
+      firstNumber: 0,
+      lastNumber: MAX_RACK_SLOTS,
+    })
+    expect(result.success).toBe(false)
+    expect(result.success === false && result.error.issues[0]?.message).toContain(
+      'ne peut pas dépasser',
+    )
+  })
+
+  it('accepte un mur entier sous le plafond global', () => {
+    expect(
+      createRackSchema.safeParse({ name: 'Mur', firstNumber: 1, lastNumber: MAX_RACK_SLOTS })
+        .success,
+    ).toBe(true)
   })
 })
 
@@ -371,73 +428,7 @@ describe('wineDataSchema', () => {
   })
 })
 
-describe('createRackSchema — champs obligatoires vidés', () => {
-  /**
-   * Même classe de bug que le prix d'achat, sur un champ cette fois obligatoire :
-   * vider « Rangées » doit produire un message lisible, pas un « Expected number ».
-   */
-  it('refuse une dimension vide avec un message compréhensible', () => {
-    const result = createRackSchema.safeParse({ name: 'Cave', rows: '', cols: 10 })
-
-    expect(result.success).toBe(false)
-    expect(result.success === false && result.error.issues[0]?.message).toBe(
-      `Indique le nombre de rangées (1 à ${MAX_RACK_SIDE}).`,
-    )
-  })
-
-  it('accepte une saisie numérique textuelle', () => {
-    const result = createRackSchema.safeParse({ name: 'Cave', rows: '6', cols: '10' })
-
-    expect(result.success).toBe(true)
-    expect(result.success && result.data.rows).toBe(6)
-  })
-
-  it('conserve les bornes de dimension', () => {
-    expect(createRackSchema.safeParse({ name: 'Cave', rows: 0, cols: 10 }).success).toBe(false)
-    expect(
-      createRackSchema.safeParse({ name: 'Cave', rows: MAX_RACK_SIDE + 1, cols: 10 }).success,
-    ).toBe(false)
-  })
-
-  /**
-   * Une cave n'a pas de taille standard : un mur entier doit passer. La seule limite est
-   * celle qui protège la base et le rendu.
-   */
-  it('accepte un grand casier sous le plafond global', () => {
-    expect(createRackSchema.safeParse({ name: 'Cave', rows: 40, cols: 60 }).success).toBe(true)
-  })
-
-  it('refuse un casier au-delà du plafond global', () => {
-    const result = createRackSchema.safeParse({ name: 'Cave', rows: 100, cols: 200 })
-
-    expect(result.success).toBe(false)
-    expect(result.success === false && result.error.issues[0]?.message).toContain(
-      'ne peut pas dépasser',
-    )
-  })
-})
-
-describe('updateSlotNumberSchema', () => {
-  /**
-   * Les caves réelles sont mal étiquetées : un casier de six alvéoles numérotées
-   * 1, 2, 3, 100, 5, 6 doit être représentable.
-   */
-  it('accepte un numéro hors de la suite du casier', () => {
-    expect(updateSlotNumberSchema.safeParse({ number: 100 }).success).toBe(true)
-  })
-
-  it('accepte une saisie textuelle venue d’un input number', () => {
-    const result = updateSlotNumberSchema.safeParse({ number: '100' })
-
-    expect(result.success).toBe(true)
-    expect(result.success && result.data.number).toBe(100)
-  })
-
-  it('refuse un numéro négatif ou décimal', () => {
-    expect(updateSlotNumberSchema.safeParse({ number: -1 }).success).toBe(false)
-    expect(updateSlotNumberSchema.safeParse({ number: 1.5 }).success).toBe(false)
-  })
-
+describe('createBottleSchema — emplacement', () => {
   it('refuse un emplacement vide à l’ajout d’une bouteille', () => {
     const result = createBottleSchema.safeParse({
       wine: { name: 'X', source: 'MANUAL' },

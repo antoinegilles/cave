@@ -48,6 +48,7 @@ function bottle(
     personalRating: null,
     purchasePrice: null,
     labelPhotoPath: null,
+    ownerLabel: null,
     slotNumber,
     rackId,
     rackName,

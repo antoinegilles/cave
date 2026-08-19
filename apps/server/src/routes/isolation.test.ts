@@ -107,7 +107,7 @@ describe('isolation des caves', () => {
     await handler(
       {
         ...request('ADMIN', 'user-other'),
-        body: { name: 'Personnel', rows: 2, cols: 2, numbering: 'ROW_MAJOR', startNumber: 1 },
+        body: { name: 'Personnel', firstNumber: 1, lastNumber: 4 },
       },
       reply(),
     )

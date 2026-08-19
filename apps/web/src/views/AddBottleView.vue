@@ -3,6 +3,7 @@ import { MAX_BOTTLES_PER_ADD, WINE_COLORS, WINE_COLOR_LABELS } from '@cave/share
 import {
   CameraIcon,
   CheckIcon,
+  InformationCircleIcon,
   MagnifyingGlassIcon,
   TagIcon,
   XMarkIcon,
@@ -14,6 +15,7 @@ import { ApiError, api } from '../lib/api'
 import { prepareImage } from '../lib/image'
 import { parseSlotSelection } from '../lib/slotSelection'
 import type { CandidateView, ResolveResult, WineView } from '../lib/types'
+import { useAuthStore } from '../stores/auth'
 import { useCellarStore } from '../stores/cellar'
 
 /**
@@ -27,6 +29,7 @@ import { useCellarStore } from '../stores/cellar'
 const route = useRoute()
 const router = useRouter()
 const cellar = useCellarStore()
+const auth = useAuthStore()
 
 type Step = 'choose' | 'form'
 const step = ref<Step>('choose')
@@ -49,6 +52,8 @@ const slotEntryError = ref<string | null>(null)
 const rackChangeNotice = ref<string | null>(null)
 const personalNote = ref('')
 const purchasePrice = ref<number | string | null>(null)
+// Prérempli avec le compte connecté ; l'utilisateur le remplace pour la bouteille d'un ami.
+const ownerLabel = ref(auth.user?.name ?? '')
 
 const manualQuery = ref('')
 const barcode = ref('')
@@ -361,6 +366,7 @@ async function submit(): Promise<void> {
       })),
       personalNote: personalNote.value.trim() || null,
       purchasePrice: numberOrNull(purchasePrice.value),
+      ownerLabel: ownerLabel.value.trim() || null,
     })
 
     await cellar.loadRacks()
@@ -656,6 +662,25 @@ const inputClass =
             v-model="personalNote"
             rows="2"
             placeholder="Offert par Jean, à ouvrir pour Noël…"
+            :class="inputClass"
+          />
+        </div>
+
+        <div>
+          <label for="wine-owner" class="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-muted">
+            Propriétaire de la bouteille
+            <span
+              class="text-muted"
+              title="Prérempli avec ton nom. S'il s'agit de la bouteille d'un ami, remplace-le par son nom."
+            >
+              <InformationCircleIcon class="h-4 w-4" />
+            </span>
+          </label>
+          <input
+            id="wine-owner"
+            v-model="ownerLabel"
+            type="text"
+            placeholder="Ton nom, ou celui d'un ami"
             :class="inputClass"
           />
         </div>

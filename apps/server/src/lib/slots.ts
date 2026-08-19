@@ -1,4 +1,4 @@
-import { MAX_SLOT_NUMBER, type RackNumbering } from '@cave/shared'
+import { RACK_COLUMNS } from '@cave/shared'
 
 export interface SlotPosition {
   number: number
@@ -7,47 +7,40 @@ export interface SlotPosition {
 }
 
 /**
- * Génère les emplacements d'un casier.
+ * Emplacements d'une cave décrite par un intervalle `[first, last]`.
  *
- * La numérotation doit correspondre à ce qui est écrit **physiquement** sur le casier :
- * - ROW_MAJOR : on numérote ligne par ligne (1..cols sur la rangée du bas, puis on monte).
- * - COL_MAJOR : on numérote colonne par colonne (1..rows sur la colonne de gauche).
- *
- * `row` 0 est la rangée **du bas** — c'est ainsi qu'on lit un casier à vin, et la vue SVG
- * inverse l'axe pour l'afficher. `startNumber` permet de commencer à 0 ou à 101.
+ * La cave n'est plus un meuble « rangées × colonnes » mais une suite continue de numéros.
+ * On les dispose en grille de largeur fixe (`RACK_COLUMNS`) pour que le plan reste 2D, mais
+ * l'utilisateur ne pense qu'en « de X à Y ». `row` 0 est la rangée du bas, comme on lit un
+ * casier — la vue SVG inverse l'axe. La dernière rangée peut être partielle : c'est correct,
+ * le plan itère sur les emplacements réels.
  */
-export function generateSlots(
-  rows: number,
-  cols: number,
-  numbering: RackNumbering,
-  startNumber: number,
-): SlotPosition[] {
+export function rangeSlots(first: number, last: number, cols = RACK_COLUMNS): SlotPosition[] {
   const slots: SlotPosition[] = []
-
-  if (numbering === 'ROW_MAJOR') {
-    for (let row = 0; row < rows; row++) {
-      for (let col = 0; col < cols; col++) {
-        slots.push({ number: startNumber + row * cols + col, row, col })
-      }
-    }
-  } else {
-    for (let col = 0; col < cols; col++) {
-      for (let row = 0; row < rows; row++) {
-        slots.push({ number: startNumber + col * rows + row, row, col })
-      }
-    }
+  for (let number = first; number <= last; number++) {
+    const i = number - first
+    slots.push({ number, row: Math.floor(i / cols), col: i % cols })
   }
-
   return slots
+}
+
+/**
+ * Géométrie dérivée d'un intervalle, stockée dans `Rack`.
+ *
+ * `rows`/`cols`/`startNumber` restent en base parce que le plan les lit, mais ils ne sont
+ * jamais saisis : ils découlent de l'intervalle. `numbering` est toujours `ROW_MAJOR`.
+ */
+export function rangeGeometry(first: number, last: number, cols = RACK_COLUMNS) {
+  const count = last - first + 1
+  return { rows: Math.ceil(count / cols), cols, startNumber: first }
 }
 
 /**
  * Affichage sur 2 chiffres minimum : le casier physique est étiqueté « 03 », pas « 3 ».
  *
  * Le complément ne vaut que si tout le casier tient sur deux chiffres. Dès qu'un
- * emplacement a été renuméroté au-delà (une cave 1, 2, 3, 100, 5, 6 est un cas réel),
- * afficher « 05 » à côté de « 100 » invente une numérotation qui n'existe pas sur le
- * meuble : on rend alors les numéros tels qu'ils sont écrits. Voir `shouldPadSlots`.
+ * emplacement dépasse (« 100 » à côté de « 05 » invente une numérotation qui n'est pas sur
+ * le meuble), on rend les numéros tels quels. Voir `shouldPadSlots`.
  */
 export function formatSlotNumber(n: number, pad = true): string {
   return pad && n < 10 ? `0${n}` : String(n)
@@ -62,105 +55,47 @@ export interface ExistingSlot extends SlotPosition {
   id: string
 }
 
-export interface SlotReconciliation {
-  /** Positions apparues avec le nouveau format, à créer. */
+export interface RangeReconciliation {
+  /** Numéros apparus dans le nouvel intervalle, à créer. */
   toCreate: SlotPosition[]
-  /** Emplacements hors de la nouvelle grille, à supprimer. */
+  /** Emplacements dont le numéro sort de l'intervalle, à supprimer. */
   toDelete: ExistingSlot[]
-}
-
-export interface RenumberedSlot {
-  id: string
-  number: number
-}
-
-/** Calcule les étiquettes à partir du début propre à chaque rangée. */
-export function renumberByRow(
-  slots: ExistingSlot[],
-  rows: number,
-  numbering: RackNumbering,
-  startNumbers: number[],
-): RenumberedSlot[] {
-  if (startNumbers.length !== rows) {
-    throw new Error(`Indique exactement ${rows} débuts de rangée.`)
-  }
-
-  const step = numbering === 'ROW_MAJOR' ? 1 : rows
-  const result = slots.map((slot) => ({
-    id: slot.id,
-    number: startNumbers[slot.row]! + slot.col * step,
-  }))
-  if (result.some((slot) => slot.number > MAX_SLOT_NUMBER)) {
-    throw new Error(`Un numéro dépasse ${MAX_SLOT_NUMBER.toLocaleString('fr-FR')}.`)
-  }
-  if (new Set(result.map((slot) => slot.number)).size !== result.length) {
-    throw new Error('La renumérotation produirait des numéros en double.')
-  }
-  return result
+  /** Emplacements conservés dont la position d'affichage a changé (numéro inchangé). */
+  toMove: { id: string; row: number; col: number }[]
 }
 
 /**
- * Réconcilie les emplacements d'un casier après un redimensionnement.
+ * Réconcilie les emplacements après un changement d'intervalle.
  *
- * On raisonne en **positions** `(row, col)`, jamais en numéros : un emplacement *est* une
- * case physique du meuble, son numéro n'en est que l'étiquette. Réconcilier par numéro —
- * ce que faisait la route auparavant — supprimait tout emplacement renuméroté hors de la
- * suite générée, donc effaçait silencieusement la numérotation personnalisée au premier
- * changement de taille.
- *
- * Conséquence voulue : les cases qui survivent **gardent leur numéro**. Seules les cases
- * nouvellement créées en reçoivent un, pris dans la suite générée puis, si celui-ci est
- * déjà utilisé, au premier numéro libre au-dessus du maximum existant.
- *
- * Renuméroter tout le casier reste possible, mais c'est un geste explicite : changer
- * `numbering` ou `startNumber` (voir la route, qui régénère alors entièrement).
+ * On raisonne par **numéro**, jamais par position : l'utilisateur pense « la bouteille est
+ * au 47 ». Un emplacement dont le numéro reste dans l'intervalle est conservé — et sa
+ * bouteille avec lui. La position `(row, col)` n'est qu'un placement d'affichage : si le
+ * premier numéro bouge, toutes les positions glissent sans qu'aucune bouteille ne se
+ * déplace, d'où `toMove`. La route applique ces déplacements en deux passes pour ne pas
+ * heurter la contrainte d'unicité de position pendant la transaction.
  */
-export function reconcileSlots(
+export function reconcileRange(
   existing: ExistingSlot[],
-  rows: number,
-  cols: number,
-  numbering: RackNumbering,
-  startNumber: number,
-): SlotReconciliation {
-  const target = generateSlots(rows, cols, numbering, startNumber)
-  const positionKey = (p: { row: number; col: number }) => `${p.row}:${p.col}`
+  first: number,
+  last: number,
+  cols = RACK_COLUMNS,
+): RangeReconciliation {
+  const target = rangeSlots(first, last, cols)
+  const byNumber = new Map(existing.map((slot) => [slot.number, slot]))
 
-  const byPosition = new Map(existing.map((slot) => [positionKey(slot), slot]))
-
-  // Les numéros des cases conservées sont intouchables : on les recense avant d'attribuer
-  // quoi que ce soit aux nouvelles.
-  const taken = new Set<number>()
-  let highest = startNumber - 1
-  for (const position of target) {
-    const kept = byPosition.get(positionKey(position))
-    if (!kept) continue
-    taken.add(kept.number)
-    if (kept.number > highest) highest = kept.number
-  }
-
-  let nextFree = highest + 1
   const toCreate: SlotPosition[] = []
-
+  const toMove: { id: string; row: number; col: number }[] = []
   for (const position of target) {
-    if (byPosition.has(positionKey(position))) continue
-    // Le numéro généré est le premier choix ; s'il est déjà porté par une case conservée,
-    // on prend le premier numéro libre au-dessus de tous les autres.
-    let number = position.number
-    if (taken.has(number)) {
-      while (taken.has(nextFree)) nextFree++
-      number = nextFree++
+    const kept = byNumber.get(position.number)
+    if (!kept) {
+      toCreate.push(position)
+    } else if (kept.row !== position.row || kept.col !== position.col) {
+      toMove.push({ id: kept.id, row: position.row, col: position.col })
     }
-    if (number > MAX_SLOT_NUMBER) {
-      throw new Error(
-        `Aucun numéro libre inférieur ou égal à ${MAX_SLOT_NUMBER.toLocaleString('fr-FR')}.`,
-      )
-    }
-    taken.add(number)
-    toCreate.push({ ...position, number })
   }
 
-  const targetPositions = new Set(target.map(positionKey))
-  const toDelete = existing.filter((slot) => !targetPositions.has(positionKey(slot)))
+  const targetNumbers = new Set(target.map((slot) => slot.number))
+  const toDelete = existing.filter((slot) => !targetNumbers.has(slot.number))
 
-  return { toCreate, toDelete }
+  return { toCreate, toDelete, toMove }
 }

@@ -47,6 +47,7 @@ export default async function bottleRoutes(app: FastifyInstance) {
       personalNote?: string | null
       purchasePrice?: number | null
       labelPhotoPath?: string | null
+      ownerLabel?: string | null
     } = {},
   ) {
     const slots = await tx.slot.findMany({
@@ -80,6 +81,7 @@ export default async function bottleRoutes(app: FastifyInstance) {
             personalNote: details.personalNote,
             purchasePrice: details.purchasePrice,
             labelPhotoPath: details.labelPhotoPath,
+            ownerLabel: details.ownerLabel,
           },
           select: { id: true },
         })
@@ -222,7 +224,7 @@ export default async function bottleRoutes(app: FastifyInstance) {
     if (!parsed.success) {
       return reply.code(400).send({ error: 'Requête invalide', issues: parsed.error.issues })
     }
-    const { wine, personalNote, purchasePrice, labelPhotoPath } = parsed.data
+    const { wine, personalNote, purchasePrice, labelPhotoPath, ownerLabel } = parsed.data
     const placements = parsed.data.placements ??
       (parsed.data.slotNumbers ?? [parsed.data.slotNumber!]).map((slotNumber) => ({
         rackId: parsed.data.rackId!,
@@ -237,6 +239,7 @@ export default async function bottleRoutes(app: FastifyInstance) {
           personalNote,
           purchasePrice,
           labelPhotoPath,
+          ownerLabel,
         })
       })
       .catch((error: unknown) => {
@@ -301,6 +304,7 @@ export default async function bottleRoutes(app: FastifyInstance) {
         personalNote: true,
         purchasePrice: true,
         labelPhotoPath: true,
+        ownerLabel: true,
       },
     })
     if (!source) return reply.code(404).send({ error: 'Bouteille introuvable' })
@@ -414,6 +418,7 @@ export default async function bottleRoutes(app: FastifyInstance) {
         ...(parsed.data.purchasePrice !== undefined
           ? { purchasePrice: parsed.data.purchasePrice }
           : {}),
+        ...(parsed.data.ownerLabel !== undefined ? { ownerLabel: parsed.data.ownerLabel } : {}),
       },
       include: {
         wine: { include: { foodTags: { include: { foodTag: true } } } },

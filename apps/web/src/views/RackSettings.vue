@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { MAX_RACK_SIDE, MAX_RACK_SLOTS, MAX_SLOT_NUMBER } from '@cave/shared'
+import { MAX_RACK_SLOTS, MAX_SLOT_NUMBER } from '@cave/shared'
 import { computed, onMounted, ref } from 'vue'
 import ConfirmSheet from '../components/ConfirmSheet.vue'
 import { api } from '../lib/api'
-import { rowLabel } from '../lib/rackLayout'
 import type { RackView } from '../lib/types'
 import { useCellarStore } from '../stores/cellar'
 import { useNotificationsStore } from '../stores/notifications'
@@ -13,37 +12,24 @@ const notifications = useNotificationsStore()
 const error = ref<string | null>(null)
 const busy = ref(false)
 
-type RackDraft = Pick<RackView, 'name' | 'rows' | 'cols' | 'numbering' | 'startNumber'>
+/** Une cave se saisit désormais comme un intervalle : « de firstNumber à lastNumber ». */
+interface RackDraft {
+  name: string
+  firstNumber: number
+  lastNumber: number
+}
 const drafts = ref<Record<string, RackDraft>>({})
-const rowStarts = ref<Record<string, number[]>>({})
-const newRack = ref<RackDraft>({
-  name: '',
-  rows: 6,
-  cols: 10,
-  numbering: 'ROW_MAJOR',
-  startNumber: 1,
-})
+const newRack = ref<RackDraft>({ name: '', firstNumber: 1, lastNumber: 60 })
+
+/** Un casier stocke ses emplacements, pas ses bornes : on les relit depuis les numéros. */
+function boundsOf(rack: RackView): { firstNumber: number; lastNumber: number } {
+  const numbers = rack.slots.map((slot) => slot.number)
+  return { firstNumber: Math.min(...numbers), lastNumber: Math.max(...numbers) }
+}
 
 function syncDrafts(): void {
   drafts.value = Object.fromEntries(
-    cellar.racks.map((rack) => [
-      rack.id,
-      {
-        name: rack.name,
-        rows: rack.rows,
-        cols: rack.cols,
-        numbering: rack.numbering,
-        startNumber: rack.startNumber,
-      },
-    ]),
-  )
-  rowStarts.value = Object.fromEntries(
-    cellar.racks.map((rack) => [
-      rack.id,
-      Array.from({ length: rack.rows }, (_, row) =>
-        [...rack.slots].sort((a, b) => a.col - b.col).find((slot) => slot.row === row)?.number ?? 1,
-      ),
-    ]),
+    cellar.racks.map((rack) => [rack.id, { name: rack.name, ...boundsOf(rack) }]),
   )
 }
 
@@ -52,19 +38,21 @@ onMounted(async () => {
   syncDrafts()
 })
 
-function validDimensions(draft: RackDraft): boolean {
-  return (
-    Number.isInteger(draft.rows) &&
-    Number.isInteger(draft.cols) &&
-    draft.rows >= 1 &&
-    draft.rows <= MAX_RACK_SIDE &&
-    draft.cols >= 1 &&
-    draft.cols <= MAX_RACK_SIDE &&
-    draft.rows * draft.cols <= MAX_RACK_SLOTS
-  )
+/** Nombre d'emplacements d'un intervalle, ou null si l'intervalle est invalide. */
+function slotCount(draft: RackDraft): number | null {
+  const { firstNumber, lastNumber } = draft
+  if (!Number.isInteger(firstNumber) || !Number.isInteger(lastNumber)) return null
+  if (firstNumber < 0 || lastNumber < firstNumber) return null
+  const count = lastNumber - firstNumber + 1
+  return count <= MAX_RACK_SLOTS ? count : null
 }
 
-const canCreate = computed(() => newRack.value.name.trim() && validDimensions(newRack.value))
+function isValid(draft: RackDraft): boolean {
+  return Boolean(draft.name.trim()) && slotCount(draft) !== null
+}
+
+const newCount = computed(() => slotCount(newRack.value))
+const canCreate = computed(() => isValid(newRack.value))
 
 async function reload(message: string): Promise<void> {
   await cellar.loadRacks()
@@ -78,7 +66,7 @@ async function createRack(): Promise<void> {
   error.value = null
   try {
     await api.post('/api/racks', { ...newRack.value, name: newRack.value.name.trim() })
-    newRack.value = { name: '', rows: 6, cols: 10, numbering: 'ROW_MAJOR', startNumber: 1 }
+    newRack.value = { name: '', firstNumber: 1, lastNumber: 60 }
     await reload('Casier créé.')
   } catch (reason) {
     error.value = (reason as Error).message
@@ -89,25 +77,12 @@ async function createRack(): Promise<void> {
 
 async function saveRack(id: string): Promise<void> {
   const draft = drafts.value[id]
-  if (!draft || !draft.name.trim() || !validDimensions(draft)) return
+  if (!draft || !isValid(draft)) return
   busy.value = true
   error.value = null
   try {
     await api.patch(`/api/racks/${id}`, { ...draft, name: draft.name.trim() })
     await reload('Casier mis à jour.')
-  } catch (reason) {
-    error.value = (reason as Error).message
-  } finally {
-    busy.value = false
-  }
-}
-
-async function renumber(id: string): Promise<void> {
-  busy.value = true
-  error.value = null
-  try {
-    await api.patch(`/api/racks/${id}/renumber`, { startNumbers: rowStarts.value[id] })
-    await reload('Numérotation mise à jour.')
   } catch (reason) {
     error.value = (reason as Error).message
   } finally {
@@ -136,7 +111,7 @@ async function deleteRack(): Promise<void> {
   <div class="mx-auto max-w-3xl space-y-5">
     <div>
       <h1 class="font-display text-2xl font-semibold text-text">Réglages de ma cave</h1>
-      <p class="mt-1 text-muted">Configure tes meubles et leurs numéros physiques.</p>
+      <p class="mt-1 text-muted">Décris chaque casier par l'intervalle de ses numéros physiques.</p>
     </div>
 
     <p v-if="error" role="alert" class="rounded-xl bg-danger-soft p-3 text-danger">{{ error }}</p>
@@ -147,49 +122,38 @@ async function deleteRack(): Promise<void> {
       class="space-y-4 rounded-2xl border border-line bg-surface p-4 sm:p-5"
     >
       <template v-if="drafts[rack.id]">
-        <div class="grid gap-3 sm:grid-cols-2">
-          <label class="text-sm text-muted">Nom
+        <div class="grid gap-3 sm:grid-cols-3">
+          <label class="text-sm text-muted sm:col-span-3">Nom
             <input v-model="drafts[rack.id]!.name" class="mt-1 w-full rounded-xl border border-line bg-bg p-3 text-text" />
           </label>
-          <label class="text-sm text-muted">Numérotation
-            <select v-model="drafts[rack.id]!.numbering" class="mt-1 w-full rounded-xl border border-line bg-bg p-3 text-text">
-              <option value="ROW_MAJOR">Par rangée</option>
-              <option value="COL_MAJOR">Par colonne</option>
-            </select>
+          <label class="text-sm text-muted">Du numéro
+            <input v-model.number="drafts[rack.id]!.firstNumber" type="number" min="0" :max="MAX_SLOT_NUMBER" class="mt-1 w-full rounded-xl border border-line bg-bg p-3 text-text" />
           </label>
-          <label class="text-sm text-muted">Rangées
-            <input v-model.number="drafts[rack.id]!.rows" type="number" min="1" :max="MAX_RACK_SIDE" class="mt-1 w-full rounded-xl border border-line bg-bg p-3 text-text" />
+          <label class="text-sm text-muted">Au numéro
+            <input v-model.number="drafts[rack.id]!.lastNumber" type="number" min="0" :max="MAX_SLOT_NUMBER" class="mt-1 w-full rounded-xl border border-line bg-bg p-3 text-text" />
           </label>
-          <label class="text-sm text-muted">Colonnes
-            <input v-model.number="drafts[rack.id]!.cols" type="number" min="1" :max="MAX_RACK_SIDE" class="mt-1 w-full rounded-xl border border-line bg-bg p-3 text-text" />
-          </label>
+          <p class="self-end pb-3 text-sm text-muted">
+            <template v-if="slotCount(drafts[rack.id]!) !== null">{{ slotCount(drafts[rack.id]!) }} emplacements</template>
+            <template v-else>Intervalle invalide</template>
+          </p>
         </div>
         <div class="flex flex-wrap gap-2">
-          <button type="button" class="rounded-xl bg-accent px-4 py-2.5 font-semibold text-accent-text disabled:opacity-50" :disabled="busy || !validDimensions(drafts[rack.id]!)" @click="saveRack(rack.id)">Enregistrer</button>
+          <button type="button" class="rounded-xl bg-accent px-4 py-2.5 font-semibold text-accent-text disabled:opacity-50" :disabled="busy || !isValid(drafts[rack.id]!)" @click="saveRack(rack.id)">Enregistrer</button>
           <button type="button" class="rounded-xl border border-danger px-4 py-2.5 text-danger" :disabled="busy" @click="deleting = rack">Supprimer</button>
-        </div>
-
-        <div class="border-t border-line pt-4">
-          <h2 class="font-semibold text-text">Début de chaque rangée</h2>
-          <p class="mb-3 text-sm text-muted">A est la rangée du bas. Les autres numéros sont recalculés automatiquement.</p>
-          <div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
-            <label v-for="(_, row) in rowStarts[rack.id]" :key="row" class="text-sm text-muted">
-              Rangée {{ rowLabel(row) }}
-              <input v-model.number="rowStarts[rack.id]![row]" type="number" min="0" :max="MAX_SLOT_NUMBER" class="mt-1 w-full rounded-xl border border-line bg-bg p-3 text-text" />
-            </label>
-          </div>
-          <button type="button" class="mt-3 rounded-xl border border-accent px-4 py-2.5 font-semibold text-accent" :disabled="busy" @click="renumber(rack.id)">Appliquer la numérotation</button>
         </div>
       </template>
     </section>
 
     <section class="space-y-3 rounded-2xl border border-line bg-surface p-4 sm:p-5">
       <h2 class="font-semibold text-text">Nouveau casier</h2>
-      <div class="grid gap-3 sm:grid-cols-2">
-        <input v-model="newRack.name" placeholder="Nom" class="rounded-xl border border-line bg-bg p-3 text-text" />
-        <select v-model="newRack.numbering" class="rounded-xl border border-line bg-bg p-3 text-text"><option value="ROW_MAJOR">Par rangée</option><option value="COL_MAJOR">Par colonne</option></select>
-        <input v-model.number="newRack.rows" type="number" min="1" :max="MAX_RACK_SIDE" placeholder="Rangées" class="rounded-xl border border-line bg-bg p-3 text-text" />
-        <input v-model.number="newRack.cols" type="number" min="1" :max="MAX_RACK_SIDE" placeholder="Colonnes" class="rounded-xl border border-line bg-bg p-3 text-text" />
+      <div class="grid gap-3 sm:grid-cols-3">
+        <input v-model="newRack.name" placeholder="Nom (ex. Salon)" class="rounded-xl border border-line bg-bg p-3 text-text sm:col-span-3" />
+        <input v-model.number="newRack.firstNumber" type="number" min="0" :max="MAX_SLOT_NUMBER" placeholder="Du numéro" class="rounded-xl border border-line bg-bg p-3 text-text" />
+        <input v-model.number="newRack.lastNumber" type="number" min="0" :max="MAX_SLOT_NUMBER" placeholder="Au numéro" class="rounded-xl border border-line bg-bg p-3 text-text" />
+        <p class="self-center text-sm text-muted">
+          <template v-if="newCount !== null">{{ newCount }} emplacements</template>
+          <template v-else>Intervalle invalide</template>
+        </p>
       </div>
       <button type="button" class="rounded-xl bg-accent px-4 py-2.5 font-semibold text-accent-text disabled:opacity-50" :disabled="busy || !canCreate" @click="createRack">Créer le casier</button>
     </section>

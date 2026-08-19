@@ -19,6 +19,7 @@ function bottle(
     personalRating: null,
     purchasePrice: null,
     labelPhotoPath: null,
+    ownerLabel: null,
     rackId: null,
     rackName: null,
     wine: {

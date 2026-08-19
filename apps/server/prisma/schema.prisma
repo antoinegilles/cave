@@ -150,6 +150,9 @@ model Bottle {
   personalRating Float?
   purchasePrice  Float?
   labelPhotoPath String?
+  // Nom affiché du propriétaire de l'exemplaire (« la bouteille de mon ami Jean »).
+  // Purement descriptif : sans effet sur le cloisonnement, qui repose sur `ownerId`.
+  ownerLabel     String?
 
   wine    Wine  @relation(fields: [wineId], references: [id], onDelete: Restrict)
   slot    Slot? @relation(fields: [slotId], references: [id], onDelete: SetNull)

@@ -1,58 +1,58 @@
-import { MAX_SLOT_NUMBER } from '@cave/shared'
+import { RACK_COLUMNS } from '@cave/shared'
 import { describe, expect, it } from 'vitest'
 import { buildDedupeKey, normalizeForDedupe } from './dedupe.js'
 import {
   formatSlotNumber,
-  generateSlots,
-  reconcileSlots,
-  renumberByRow,
+  rangeGeometry,
+  rangeSlots,
+  reconcileRange,
   shouldPadSlots,
 } from './slots.js'
 
-describe('generateSlots', () => {
-  it('génère un emplacement par case', () => {
-    expect(generateSlots(6, 10, 'ROW_MAJOR', 1)).toHaveLength(60)
+describe('rangeSlots', () => {
+  it('produit exactement les numéros de l’intervalle', () => {
+    const slots = rangeSlots(10, 200)
+    expect(slots).toHaveLength(191)
+    expect(slots[0]).toEqual({ number: 10, row: 0, col: 0 })
+    expect(slots.at(-1)).toEqual({ number: 200, row: 19, col: 0 })
   })
 
-  it('numérote ligne par ligne en ROW_MAJOR', () => {
-    const slots = generateSlots(3, 4, 'ROW_MAJOR', 1)
-
-    // Rangée du bas (row 0) : 1 à 4, de gauche à droite.
-    expect(slots.find((s) => s.row === 0 && s.col === 0)?.number).toBe(1)
-    expect(slots.find((s) => s.row === 0 && s.col === 3)?.number).toBe(4)
-    // Rangée suivante : on repart à 5.
-    expect(slots.find((s) => s.row === 1 && s.col === 0)?.number).toBe(5)
-    expect(slots.find((s) => s.row === 2 && s.col === 3)?.number).toBe(12)
+  it('dispose les numéros en grille de largeur fixe, rangée par rangée', () => {
+    const slots = rangeSlots(1, 25)
+    // La rangée du bas (row 0) porte 1..10, la suivante 11..20.
+    expect(slots.find((s) => s.number === 1)).toEqual({ number: 1, row: 0, col: 0 })
+    expect(slots.find((s) => s.number === 10)).toEqual({ number: 10, row: 0, col: 9 })
+    expect(slots.find((s) => s.number === 11)).toEqual({ number: 11, row: 1, col: 0 })
+    // La dernière rangée est partielle : 21..25 seulement.
+    expect(slots.find((s) => s.number === 25)).toEqual({ number: 25, row: 2, col: 4 })
   })
 
-  it('numérote colonne par colonne en COL_MAJOR', () => {
-    const slots = generateSlots(3, 4, 'COL_MAJOR', 1)
-
-    expect(slots.find((s) => s.row === 0 && s.col === 0)?.number).toBe(1)
-    expect(slots.find((s) => s.row === 2 && s.col === 0)?.number).toBe(3)
-    expect(slots.find((s) => s.row === 0 && s.col === 1)?.number).toBe(4)
-  })
-
-  it('respecte un numéro de départ personnalisé', () => {
-    const slots = generateSlots(2, 3, 'ROW_MAJOR', 101)
-    const numbers = slots.map((s) => s.number).sort((a, b) => a - b)
-    expect(numbers).toEqual([101, 102, 103, 104, 105, 106])
+  it('gère un intervalle d’un seul emplacement', () => {
+    expect(rangeSlots(7, 7)).toEqual([{ number: 7, row: 0, col: 0 }])
   })
 
   it('accepte de commencer à zéro', () => {
-    expect(generateSlots(2, 2, 'ROW_MAJOR', 0).some((s) => s.number === 0)).toBe(true)
+    expect(rangeSlots(0, 3).map((s) => s.number)).toEqual([0, 1, 2, 3])
   })
 
   it('ne produit jamais de numéro ni de position en double', () => {
-    for (const numbering of ['ROW_MAJOR', 'COL_MAJOR'] as const) {
-      const slots = generateSlots(5, 7, numbering, 1)
-      expect(new Set(slots.map((s) => s.number)).size).toBe(35)
-      expect(new Set(slots.map((s) => `${s.row}:${s.col}`)).size).toBe(35)
-    }
+    const slots = rangeSlots(100, 137)
+    expect(new Set(slots.map((s) => s.number)).size).toBe(38)
+    expect(new Set(slots.map((s) => `${s.row}:${s.col}`)).size).toBe(38)
+  })
+})
+
+describe('rangeGeometry', () => {
+  it('dérive la géométrie stockée sur le casier', () => {
+    expect(rangeGeometry(10, 200)).toEqual({ rows: 20, cols: RACK_COLUMNS, startNumber: 10 })
   })
 
-  it('gère un casier d’une seule case', () => {
-    expect(generateSlots(1, 1, 'ROW_MAJOR', 7)).toEqual([{ number: 7, row: 0, col: 0 }])
+  it('arrondit à la rangée supérieure quand la dernière est partielle', () => {
+    expect(rangeGeometry(1, 25)).toEqual({ rows: 3, cols: RACK_COLUMNS, startNumber: 1 })
+  })
+
+  it('gère un intervalle d’un seul emplacement', () => {
+    expect(rangeGeometry(7, 7)).toEqual({ rows: 1, cols: RACK_COLUMNS, startNumber: 7 })
   })
 })
 
@@ -84,84 +84,52 @@ describe('shouldPadSlots', () => {
   })
 })
 
-describe('reconcileSlots', () => {
-  /** Casier 2×3 numéroté par défaut, dont l'emplacement (0,1) a été renuméroté 100. */
-  function customRack() {
-    return generateSlots(2, 3, 'ROW_MAJOR', 1).map((s, i) => ({
-      ...s,
-      id: `slot-${i}`,
-      number: s.row === 0 && s.col === 1 ? 100 : s.number,
-    }))
+describe('reconcileRange', () => {
+  /** Cave 10 → 30 telle que stockée, avec des identifiants d'emplacement stables. */
+  function existingRack(first = 10, last = 30) {
+    return rangeSlots(first, last).map((slot) => ({ ...slot, id: `slot-${slot.number}` }))
   }
 
-  it('préserve un numéro personnalisé quand on agrandit le casier', () => {
-    const { toCreate, toDelete } = reconcileSlots(customRack(), 2, 4, 'ROW_MAJOR', 1)
+  it('conserve les emplacements dont le numéro reste dans l’intervalle', () => {
+    // On étend 10→30 vers 10→40 : rien ne disparaît, seuls 31..40 sont créés.
+    const { toCreate, toDelete, toMove } = reconcileRange(existingRack(), 10, 40)
 
-    // Aucune case existante ne disparaît, et le 100 n'est jamais recréé ni écrasé.
     expect(toDelete).toEqual([])
-    expect(toCreate.map((s) => `${s.row}:${s.col}`).sort()).toEqual(['0:3', '1:3'])
-    expect(toCreate.some((s) => s.number === 100)).toBe(false)
-  })
-
-  it('ne supprime que les positions sorties de la grille', () => {
-    const { toCreate, toDelete } = reconcileSlots(customRack(), 2, 2, 'ROW_MAJOR', 1)
-
-    expect(toCreate).toEqual([])
-    expect(toDelete.map((s) => `${s.row}:${s.col}`).sort()).toEqual(['0:2', '1:2'])
-  })
-
-  it('n’attribue jamais un numéro déjà porté par une case conservée', () => {
-    // La suite générée pour un 2×4 contient 5, or 5 est déjà pris par la case (1,1)
-    // du casier d'origine — la nouvelle case doit recevoir autre chose.
-    const existing = customRack()
-    const { toCreate } = reconcileSlots(existing, 2, 4, 'ROW_MAJOR', 1)
-
-    const kept = existing
-      .filter((s) => s.row < 2 && s.col < 4)
-      .map((s) => s.number)
-    const created = toCreate.map((s) => s.number)
-
-    expect(new Set([...kept, ...created]).size).toBe(kept.length + created.length)
-  })
-
-  it('laisse un casier intact quand rien ne change', () => {
-    const { toCreate, toDelete } = reconcileSlots(customRack(), 2, 3, 'ROW_MAJOR', 1)
-    expect(toCreate).toEqual([])
-    expect(toDelete).toEqual([])
-  })
-
-  it('refuse de dépasser la borne Int32 pour résoudre une collision', () => {
-    const existing = [
-      { id: 'slot-max', row: 0, col: 0, number: MAX_SLOT_NUMBER },
-      { id: 'slot-three', row: 0, col: 1, number: 3 },
-    ]
-
-    expect(() => reconcileSlots(existing, 1, 3, 'ROW_MAJOR', 1)).toThrow(
-      'Aucun numéro libre',
-    )
-  })
-})
-
-describe('renumberByRow', () => {
-  const slots = generateSlots(2, 3, 'ROW_MAJOR', 1).map((slot, index) => ({
-    ...slot,
-    id: `slot-${index}`,
-  }))
-
-  it('applique un départ indépendant à chaque rangée', () => {
-    expect(renumberByRow(slots, 2, 'ROW_MAJOR', [1001, 4020]).map((slot) => slot.number)).toEqual([
-      1001, 1002, 1003, 4020, 4021, 4022,
+    expect(toMove).toEqual([])
+    expect(toCreate.map((s) => s.number)).toEqual([
+      31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
     ])
   })
 
-  it('respecte le pas de la numérotation par colonne', () => {
-    expect(renumberByRow(slots, 2, 'COL_MAJOR', [1001, 4020]).map((slot) => slot.number)).toEqual([
-      1001, 1003, 1005, 4020, 4022, 4024,
+  it('ne supprime que les numéros sortis de l’intervalle', () => {
+    // On resserre 10→30 vers 10→20 : 21..30 partent, le reste demeure.
+    const { toCreate, toDelete, toMove } = reconcileRange(existingRack(), 10, 20)
+
+    expect(toCreate).toEqual([])
+    expect(toMove).toEqual([])
+    expect(toDelete.map((s) => s.number).sort((a, b) => a - b)).toEqual([
+      21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
     ])
   })
 
-  it('refuse les doublons entre rangées', () => {
-    expect(() => renumberByRow(slots, 2, 'ROW_MAJOR', [1001, 1003])).toThrow('double')
+  it('conserve la bouteille par son numéro quand le premier numéro glisse', () => {
+    // 10→30 devient 5→30 : le numéro 20 est conservé (id inchangé) mais sa position
+    // d'affichage glisse d'une rangée puisque tout l'intervalle se décale.
+    const { toCreate, toDelete, toMove } = reconcileRange(existingRack(), 5, 30)
+
+    expect(toDelete).toEqual([])
+    expect(toCreate.map((s) => s.number).sort((a, b) => a - b)).toEqual([5, 6, 7, 8, 9])
+    // Le 20 était en (row 1, col 0) pour un départ à 10 ; pour un départ à 5 il passe
+    // en (row 1, col 5). Son id ne change pas : aucune bouteille n'est déplacée.
+    const moved = toMove.find((m) => m.id === 'slot-20')
+    expect(moved).toEqual({ id: 'slot-20', row: 1, col: 5 })
+  })
+
+  it('laisse un casier intact quand l’intervalle ne change pas', () => {
+    const { toCreate, toDelete, toMove } = reconcileRange(existingRack(), 10, 30)
+    expect(toCreate).toEqual([])
+    expect(toDelete).toEqual([])
+    expect(toMove).toEqual([])
   })
 })
 

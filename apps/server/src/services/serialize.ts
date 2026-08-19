@@ -36,6 +36,7 @@ interface BottleRow {
   personalRating: number | null
   purchasePrice: number | null
   labelPhotoPath: string | null
+  ownerLabel: string | null
   wine: WineRow
   slot?: { id: string; number: number; rackId: string; rack?: { name: string } } | null
 }
@@ -116,6 +117,7 @@ export function serializeBottle(bottle: BottleRow) {
     personalRating: bottle.personalRating,
     purchasePrice: bottle.purchasePrice,
     labelPhotoPath: bottle.labelPhotoPath,
+    ownerLabel: bottle.ownerLabel,
     slotNumber: bottle.slot?.number ?? null,
     rackId: bottle.slot?.rackId ?? null,
     rackName: bottle.slot?.rack?.name ?? null,

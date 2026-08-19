@@ -119,6 +119,14 @@ function subtitle(bottle: BottleView): string {
 
             <p class="truncate text-sm text-muted">{{ subtitle(group.representative) }}</p>
 
+            <!-- Propriétaire : nom seul, en italique discret, sans libellé qui alourdirait. -->
+            <p
+              v-if="group.representative.ownerLabel"
+              class="truncate text-xs italic text-faint"
+            >
+              {{ group.representative.ownerLabel }}
+            </p>
+
             <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
               <span
                 v-if="group.representative.wine.vivinoRating"

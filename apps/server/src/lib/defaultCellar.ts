@@ -1,19 +1,18 @@
-import { generateSlots } from './slots.js'
+import { rangeGeometry, rangeSlots } from './slots.js'
 
-export const DEFAULT_CELLAR_ROWS = 6
-export const DEFAULT_CELLAR_COLS = 10
+/** Intervalle de la cave créée d'office : 1 → 60, soit une cave 6 × 10 de départ. */
+export const DEFAULT_CELLAR_FIRST = 1
+export const DEFAULT_CELLAR_LAST = 60
 
 /** Forme Prisma commune à l'inscription, à la création admin et au seed. */
 export function defaultCellarCreate(name = 'Ma cave') {
   return {
     name,
-    rows: DEFAULT_CELLAR_ROWS,
-    cols: DEFAULT_CELLAR_COLS,
+    ...rangeGeometry(DEFAULT_CELLAR_FIRST, DEFAULT_CELLAR_LAST),
     numbering: 'ROW_MAJOR',
-    startNumber: 1,
     position: 0,
     slots: {
-      create: generateSlots(DEFAULT_CELLAR_ROWS, DEFAULT_CELLAR_COLS, 'ROW_MAJOR', 1),
+      create: rangeSlots(DEFAULT_CELLAR_FIRST, DEFAULT_CELLAR_LAST),
     },
   }
 }

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { WINE_COLOR_LABELS, type WineColor } from '@cave/shared'
-import { PhotoIcon } from '@heroicons/vue/24/outline'
 import { computed } from 'vue'
+import BottleGlyph from './BottleGlyph.vue'
 import {
   bottleGroupLocationLabel,
   compareBottleLocations,
@@ -90,7 +90,7 @@ function subtitle(bottle: BottleView): string {
           class="flex items-center gap-3 rounded-2xl border bg-surface p-3 shadow-card transition-colors hover:bg-surface-hover sm:gap-4 sm:p-4"
           :class="group.highlighted ? 'border-accent ring-2 ring-accent/30' : 'border-line'"
         >
-          <!-- Visuel de la bouteille, ou pastille de couleur à défaut -->
+          <!-- Visuel de la bouteille, ou silhouette colorée par type de vin à défaut -->
           <div
             class="flex h-16 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-surface-2 sm:h-20 sm:w-16"
           >
@@ -101,7 +101,7 @@ function subtitle(bottle: BottleView): string {
               loading="lazy"
               class="h-full w-full object-contain"
             />
-            <PhotoIcon v-else class="h-7 w-7 text-faint" aria-hidden="true" />
+            <BottleGlyph v-else :color="group.representative.wine.color" class="py-2" />
           </div>
 
           <div class="min-w-0 flex-1">

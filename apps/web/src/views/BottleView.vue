@@ -9,6 +9,7 @@ import {
 import { ArrowLeftIcon, CheckCircleIcon, PencilSquareIcon, TrashIcon } from '@heroicons/vue/24/outline'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import BottleGlyph from '../components/BottleGlyph.vue'
 import BottomSheet from '../components/BottomSheet.vue'
 import ConfirmSheet from '../components/ConfirmSheet.vue'
 import MeterRow from '../components/MeterRow.vue'
@@ -378,6 +379,12 @@ async function remove(): Promise<void> {
             alt=""
             class="mx-auto h-32 w-24 shrink-0 rounded-lg object-contain sm:mx-0"
           />
+          <!-- Sans photo d'étiquette : silhouette colorée par type de vin, plutôt qu'un vide. -->
+          <div
+            v-else
+            class="mx-auto flex h-32 w-24 shrink-0 items-center justify-center rounded-lg bg-surface-2 py-3 sm:mx-0"
+          >
+            <BottleGlyph :color="bottle.wine.color" />
           <div class="min-w-0 flex-1">
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0">

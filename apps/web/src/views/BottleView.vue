@@ -385,6 +385,7 @@ async function remove(): Promise<void> {
             class="mx-auto flex h-32 w-24 shrink-0 items-center justify-center rounded-lg bg-surface-2 py-3 sm:mx-0"
           >
             <BottleGlyph :color="bottle.wine.color" />
+          </div>
           <div class="min-w-0 flex-1">
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0">

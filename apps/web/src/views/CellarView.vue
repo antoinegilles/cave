@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { ChevronDownIcon, ChevronUpIcon } from '@heroicons/vue/20/solid'
+import { computed, nextTick, onMounted, ref, useId, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import BottleList from '../components/BottleList.vue'
 import RackGrid from '../components/RackGrid.vue'
@@ -20,6 +21,9 @@ const reducedMotion = useReducedMotion()
 const hoverPointer = useHoverPointer()
 const rackCard = ref<HTMLElement | null>(null)
 const sheetSlot = ref<SlotView | null>(null)
+/** Section « Non placées » : repliée par défaut, elle ne doit pas surcharger l'écran. */
+const unplacedOpen = ref(false)
+const unplacedId = useId()
 
 onMounted(() => {
   if (cellar.racks.length === 0) cellar.loadRacks()
@@ -172,6 +176,34 @@ function openBottle(bottleId: string): void {
         {{ plural(totalWines, 'vin') }} · {{ plural(cellar.totalBottles, 'bouteille') }} ·
         {{ cellar.totalSlots }} emplacements
       </p>
+
+      <!-- Bouteilles sans emplacement : invisibles sur le plan, sinon. Repliée par défaut,
+           visible quel que soit le mode d'affichage choisi. -->
+      <div
+        v-if="cellar.unplacedBottles.length > 0"
+        class="rounded-2xl border border-line bg-surface px-3 py-2 sm:px-4"
+      >
+        <button
+          type="button"
+          class="flex min-h-11 w-full items-center justify-between gap-2 text-left"
+          :aria-expanded="unplacedOpen"
+          :aria-controls="unplacedId"
+          @click="unplacedOpen = !unplacedOpen"
+        >
+          <span class="text-sm font-semibold text-muted">
+            Non placées<span class="text-accent"> · {{ cellar.unplacedBottles.length }}</span>
+          </span>
+          <ChevronUpIcon v-if="unplacedOpen" class="h-5 w-5 text-muted" aria-hidden="true" />
+          <ChevronDownIcon v-else class="h-5 w-5 text-muted" aria-hidden="true" />
+        </button>
+        <div v-show="unplacedOpen" :id="unplacedId" class="pt-2">
+          <BottleList
+            :bottles="cellar.unplacedBottles"
+            :rack-order="cellar.racks.map((rack) => rack.id)"
+            :row-query="{ place: '1' }"
+          />
+        </div>
+      </div>
 
       <!-- Liste -->
       <BottleList

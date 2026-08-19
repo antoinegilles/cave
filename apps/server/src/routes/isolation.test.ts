@@ -94,6 +94,27 @@ describe('isolation des caves', () => {
     )
   })
 
+  it('renvoie les bouteilles sans emplacement séparément des casiers, isolées par propriétaire', async () => {
+    const handler = (await handlersFor(rackRoutes)).get('GET /')!
+    const unplacedBottle = { id: 'bottle-loose', slotId: null }
+    mocks.findManyBottles.mockResolvedValue([unplacedBottle])
+
+    const result = (await handler(request(), reply())) as { unplaced: unknown[] }
+    expect(mocks.findManyBottles).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: { status: 'IN_CELLAR', ownerId: 'user-self', slotId: null },
+      }),
+    )
+    expect(result.unplaced).toEqual([unplacedBottle])
+
+    await handler(request('ADMIN', 'user-other'), reply())
+    expect(mocks.findManyBottles).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: { status: 'IN_CELLAR', ownerId: 'user-other', slotId: null },
+      }),
+    )
+  })
+
   it('refuse asUser à un compte normal avant toute requête', async () => {
     const handler = (await handlersFor(rackRoutes)).get('GET /')!
     await expect(handler(request('USER', 'user-other'), reply())).rejects.toMatchObject({

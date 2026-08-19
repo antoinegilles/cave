@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { api } from '../lib/api'
-import type { RackView, SearchResult } from '../lib/types'
+import type { BottleView, RackView, SearchResult } from '../lib/types'
 
 export interface ViewingUser {
   id: string
@@ -34,6 +34,8 @@ function storedViewingUser(): ViewingUser | null {
  */
 export const useCellarStore = defineStore('cellar', () => {
   const racks = ref<RackView[]>([])
+  /** Bouteilles en cave sans emplacement — invisibles sur le plan, à ranger. */
+  const unplacedBottles = ref<BottleView[]>([])
   const activeRackId = ref<string | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
@@ -59,11 +61,12 @@ export const useCellarStore = defineStore('cellar', () => {
     () => racks.value.find((r) => r.id === activeRackId.value) ?? racks.value[0] ?? null,
   )
 
-  const totalBottles = computed(() =>
-    racks.value.reduce(
-      (sum, rack) => sum + rack.slots.reduce((slotSum, slot) => slotSum + slot.bottles.length, 0),
-      0,
-    ),
+  const totalBottles = computed(
+    () =>
+      racks.value.reduce(
+        (sum, rack) => sum + rack.slots.reduce((slotSum, slot) => slotSum + slot.bottles.length, 0),
+        0,
+      ) + unplacedBottles.value.length,
   )
 
   const totalSlots = computed(() => racks.value.reduce((sum, rack) => sum + rack.slots.length, 0))
@@ -86,6 +89,7 @@ export const useCellarStore = defineStore('cellar', () => {
   function startViewing(user: ViewingUser): void {
     viewingUser.value = user
     racks.value = []
+    unplacedBottles.value = []
     try {
       const storage = (window as Window & { sessionStorage?: Storage }).sessionStorage
       storage?.setItem(VIEWING_USER_KEY, JSON.stringify(user))
@@ -99,6 +103,7 @@ export const useCellarStore = defineStore('cellar', () => {
   function stopViewing(): void {
     viewingUser.value = null
     racks.value = []
+    unplacedBottles.value = []
     try {
       const storage = (window as Window & { sessionStorage?: Storage }).sessionStorage
       storage?.removeItem(VIEWING_USER_KEY)
@@ -112,6 +117,7 @@ export const useCellarStore = defineStore('cellar', () => {
   /** Efface toutes les données privées avant qu'un autre compte puisse utiliser l'onglet. */
   function reset(): void {
     racks.value = []
+    unplacedBottles.value = []
     activeRackId.value = null
     error.value = null
     stopViewing()
@@ -121,7 +127,9 @@ export const useCellarStore = defineStore('cellar', () => {
     loading.value = true
     error.value = null
     try {
-      const data = await api.get<{ racks: RackView[] }>(readPath('/api/racks'))
+      const data = await api.get<{ racks: RackView[]; unplaced: BottleView[] }>(
+        readPath('/api/racks'),
+      )
       racks.value = data.racks.map((rack) => ({
         ...rack,
         slots: rack.slots.map((slot) => ({
@@ -129,6 +137,7 @@ export const useCellarStore = defineStore('cellar', () => {
           bottles: slot.bottles ?? (slot.bottle ? [slot.bottle] : []),
         })),
       }))
+      unplacedBottles.value = data.unplaced
       if (!activeRackId.value || !data.racks.some((r) => r.id === activeRackId.value)) {
         activeRackId.value = data.racks[0]?.id ?? null
       }
@@ -217,6 +226,7 @@ export const useCellarStore = defineStore('cellar', () => {
 
   return {
     racks,
+    unplacedBottles,
     activeRackId,
     activeRack,
     loading,

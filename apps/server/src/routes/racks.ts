@@ -8,27 +8,41 @@ import { serializeBottle } from '../services/serialize.js'
 export default async function rackRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate)
 
-  /** Renvoie les casiers avec leurs emplacements et les bouteilles présentes dans chacun. */
+  /**
+   * Renvoie les casiers avec leurs emplacements et les bouteilles présentes dans chacun, plus
+   * les bouteilles en cave sans emplacement (`slotId` nul) — un import en masse en laisse
+   * couramment, et sans ce champ elles seraient invisibles partout sauf en recherche.
+   */
   app.get('/', async (req) => {
     const ownerId = await resolveCellarOwner(req)
-    const racks = await prisma.rack.findMany({
-      where: { ownerId },
-      orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
-      include: {
-        slots: {
-          orderBy: { number: 'asc' },
-          include: {
-            bottles: {
-              where: { status: 'IN_CELLAR', ownerId },
-              include: {
-                wine: { include: { foodTags: { include: { foodTag: true } } } },
-                slot: { include: { rack: true } },
+    const [racks, unplaced] = await Promise.all([
+      prisma.rack.findMany({
+        where: { ownerId },
+        orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+        include: {
+          slots: {
+            orderBy: { number: 'asc' },
+            include: {
+              bottles: {
+                where: { status: 'IN_CELLAR', ownerId },
+                include: {
+                  wine: { include: { foodTags: { include: { foodTag: true } } } },
+                  slot: { include: { rack: true } },
+                },
               },
             },
           },
         },
-      },
-    })
+      }),
+      prisma.bottle.findMany({
+        where: { status: 'IN_CELLAR', ownerId, slotId: null },
+        orderBy: { addedAt: 'desc' },
+        include: {
+          wine: { include: { foodTags: { include: { foodTag: true } } } },
+          slot: { include: { rack: true } },
+        },
+      }),
+    ])
 
     return {
       racks: racks.map((rack) => ({
@@ -48,6 +62,7 @@ export default async function rackRoutes(app: FastifyInstance) {
           bottle: slot.bottles[0] ? serializeBottle(slot.bottles[0]) : null,
         })),
       })),
+      unplaced: unplaced.map(serializeBottle),
     }
   })
 

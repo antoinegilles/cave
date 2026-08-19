@@ -27,6 +27,8 @@ const props = defineProps<{
   /** Emplacements retenus par la recherche, mis en avant dans la liste. */
   highlightedIds?: Set<string>
   emptyMessage?: string
+  /** Query ajoutée au lien de chaque ligne — sert par ex. à rouvrir le rangement direct. */
+  rowQuery?: Record<string, string>
 }>()
 
 // Le tri est un réglage, pas un état de navigation : il se réinitialisait à chaque
@@ -84,7 +86,7 @@ function subtitle(bottle: BottleView): string {
     <ul v-if="orderedGroups.length > 0" class="space-y-3">
       <li v-for="group in orderedGroups" :key="group.wineId">
         <RouterLink
-          :to="{ name: 'bottle', params: { id: group.representative.id } }"
+          :to="{ name: 'bottle', params: { id: group.representative.id }, query: rowQuery }"
           class="flex items-center gap-3 rounded-2xl border bg-surface p-3 shadow-card transition-colors hover:bg-surface-hover sm:gap-4 sm:p-4"
           :class="group.highlighted ? 'border-accent ring-2 ring-accent/30' : 'border-line'"
         >

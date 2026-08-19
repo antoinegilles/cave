@@ -85,7 +85,15 @@ const copiesValid = computed(() => {
   )
 })
 
-onMounted(load)
+onMounted(async () => {
+  await load()
+  // Arrivée depuis la liste des bouteilles non placées : ouvre directement le rangement,
+  // plutôt que de forcer un aller-retour pour trouver le bouton.
+  if (route.query['place'] === '1' && bottle.value) {
+    beginMove(bottle.value)
+    router.replace({ name: 'bottle', params: { id: route.params['id'] } })
+  }
+})
 
 async function load(): Promise<void> {
   loading.value = true

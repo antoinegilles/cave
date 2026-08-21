@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { FEATURE_FLAGS } from '@cave/shared'
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import ConfirmSheet from '../components/ConfirmSheet.vue'
 import { api } from '../lib/api'
@@ -34,10 +34,17 @@ interface AnalyticsUserRow {
   name: string
   email: string
   createdAt: string
-  lastLoginAt: string | null
+  lastSeen: string | null
   logins: number
   activated: boolean
   bottles: number
+}
+interface TimelineRow {
+  date: string
+  total: number
+  pageViews: number
+  searches: number
+  added: number
 }
 interface AnalyticsRow {
   windowDays: number
@@ -48,8 +55,11 @@ interface AnalyticsRow {
     errors: Record<string, number>
   }
   activation: { newUsers: number; activatedUsers: number; totalUsers: number }
+  retention: { activeThisWeek: number; activeLastWeek: number }
   add: { methods: Record<string, number>; bottlesAdded: number }
-  search: { performed: number; sommelier: number }
+  search: { performed: number; withResults: number; sommelier: number }
+  screens: Record<string, number>
+  timeline: TimelineRow[]
   users: AnalyticsUserRow[]
 }
 
@@ -64,6 +74,11 @@ const message = ref<string | null>(null)
 const error = ref<string | null>(null)
 
 const newUser = ref({ name: '', email: '', password: '', role: 'USER' })
+
+/** Plafond de la frise, pour mettre les barres à l'échelle (évite une division par zéro). */
+const maxTimeline = computed(() =>
+  Math.max(1, ...(analytics.value?.timeline ?? []).map((day) => day.total)),
+)
 
 onMounted(refresh)
 
@@ -93,6 +108,31 @@ function summarizeTally(tally: Record<string, number>): string {
 
 function shortDate(value: string | null): string {
   return value ? new Date(value).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' }) : '—'
+}
+
+/** « il y a 3 j », « aujourd'hui », ou un tiret — plus parlant qu'une date pour la récence. */
+function relativeDays(value: string | null): string {
+  if (!value) return '—'
+  const diff = Math.floor((Date.now() - new Date(value).getTime()) / 86_400_000)
+  if (diff <= 0) return "aujourd'hui"
+  if (diff === 1) return 'hier'
+  return `il y a ${diff} j`
+}
+
+/** Pourcentage entier d'une conversion a→b (0 si le dénominateur est nul). */
+function rate(numerator: number, denominator: number): number {
+  return denominator > 0 ? Math.round((numerator / denominator) * 100) : 0
+}
+
+/** Trie un dictionnaire {clé:n} par valeur décroissante, pour les écrans les plus vus. */
+function sortedEntries(tally: Record<string, number>): [string, number][] {
+  return Object.entries(tally).sort((a, b) => b[1] - a[1])
+}
+
+/** Écran dormant : plus de 14 jours sans trace. Sert à repérer les comptes qui décrochent. */
+function isDormant(value: string | null): boolean {
+  if (!value) return true
+  return Date.now() - new Date(value).getTime() > 14 * 86_400_000
 }
 
 function flash(text: string): void {
@@ -257,18 +297,44 @@ function clearCache(): void {
         <span class="text-xs text-faint">{{ analytics.windowDays }} derniers jours · admins exclus</span>
       </div>
 
-      <!-- Funnel d'inscription -->
+      <!-- Frise d'activité : une barre par jour (14 derniers), hauteur = nombre d'événements -->
+      <div class="mb-5">
+        <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-faint">Activité (14 j)</p>
+        <div
+          class="flex h-20 items-end gap-1"
+          role="img"
+          aria-label="Activité quotidienne des 14 derniers jours"
+        >
+          <div
+            v-for="day in analytics.timeline"
+            :key="day.date"
+            class="flex-1 rounded-t bg-accent/70"
+            :style="{ height: `${maxTimeline > 0 ? Math.max((day.total / maxTimeline) * 100, day.total > 0 ? 6 : 0) : 0}%` }"
+            :title="`${day.date} : ${day.total} évén. (vues ${day.pageViews}, recherches ${day.searches}, ajouts ${day.added})`"
+          />
+        </div>
+        <div class="mt-1 flex justify-between text-[0.65rem] text-faint">
+          <span>{{ analytics.timeline[0]?.date.slice(5) }}</span>
+          <span>{{ analytics.timeline[analytics.timeline.length - 1]?.date.slice(5) }}</span>
+        </div>
+      </div>
+
+      <!-- Funnel d'inscription, avec taux de conversion -->
       <div class="mb-4">
         <p class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-faint">Inscription</p>
-        <div class="flex flex-wrap items-center gap-2 text-sm">
+        <div class="flex flex-wrap items-center gap-1.5 text-sm">
           <span class="rounded-lg bg-surface-2 px-2.5 py-1 text-muted">
             page vue <strong class="text-text">{{ analytics.registration.pageViews }}</strong>
           </span>
-          <span aria-hidden="true" class="text-faint">→</span>
+          <span aria-hidden="true" class="text-xs text-faint">
+            →{{ rate(analytics.registration.submitted, analytics.registration.pageViews) }}%
+          </span>
           <span class="rounded-lg bg-surface-2 px-2.5 py-1 text-muted">
             formulaire soumis <strong class="text-text">{{ analytics.registration.submitted }}</strong>
           </span>
-          <span aria-hidden="true" class="text-faint">→</span>
+          <span aria-hidden="true" class="text-xs text-faint">
+            →{{ rate(analytics.registration.success, analytics.registration.submitted) }}%
+          </span>
           <span class="rounded-lg bg-accent-soft px-2.5 py-1 text-accent">
             compte créé <strong>{{ analytics.registration.success }}</strong>
           </span>
@@ -281,21 +347,45 @@ function clearCache(): void {
         </p>
       </div>
 
-      <!-- Activation, ajout, recherche -->
-      <div class="grid grid-cols-1 gap-2 text-sm sm:grid-cols-3">
+      <!-- Activation, rétention, ajout, recherche -->
+      <div class="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
         <p class="text-muted">
           Activés :
           <strong class="text-text">{{ analytics.activation.activatedUsers }}</strong> /
           {{ analytics.activation.totalUsers }}
-          <span class="text-faint">(≥1 bouteille)</span>
+          <span class="text-faint">
+            ({{ rate(analytics.activation.activatedUsers, analytics.activation.totalUsers) }}%, ≥1 bouteille)
+          </span>
+        </p>
+        <p class="text-muted">
+          Actifs 7 j :
+          <strong class="text-text">{{ analytics.retention.activeThisWeek }}</strong>
+          <span class="text-faint">· 7 j préc. {{ analytics.retention.activeLastWeek }}</span>
         </p>
         <p class="text-muted">
           Voies d'ajout : <strong class="text-text">{{ summarizeTally(analytics.add.methods) }}</strong>
         </p>
         <p class="text-muted">
           Recherches : <strong class="text-text">{{ analytics.search.performed }}</strong>
-          <span class="text-faint">· sommelier {{ analytics.search.sommelier }}</span>
+          <span class="text-faint">
+            · {{ rate(analytics.search.withResults, analytics.search.performed) }}% fructueuses ·
+            sommelier {{ analytics.search.sommelier }}
+          </span>
         </p>
+      </div>
+
+      <!-- Écrans les plus vus -->
+      <div v-if="Object.keys(analytics.screens).length" class="mt-4">
+        <p class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-faint">Écrans les plus vus</p>
+        <div class="flex flex-wrap gap-1.5 text-sm">
+          <span
+            v-for="[screen, n] in sortedEntries(analytics.screens).slice(0, 6)"
+            :key="screen"
+            class="rounded-lg bg-surface-2 px-2.5 py-1 text-muted"
+          >
+            {{ screen }} <strong class="text-text">{{ n }}</strong>
+          </span>
+        </div>
       </div>
 
       <!-- Table nominative : qui a fait quoi -->
@@ -317,7 +407,9 @@ function clearCache(): void {
                 <span class="text-text">{{ u.name }}</span>
               </td>
               <td class="py-1.5 pr-3 text-muted">{{ shortDate(u.createdAt) }}</td>
-              <td class="py-1.5 pr-3 text-muted">{{ shortDate(u.lastLoginAt) }}</td>
+              <td class="py-1.5 pr-3" :class="isDormant(u.lastSeen) ? 'text-warning' : 'text-muted'">
+                {{ relativeDays(u.lastSeen) }}
+              </td>
               <td class="py-1.5 pr-3 text-muted">{{ u.logins }}</td>
               <td class="py-1.5 pr-3 text-muted">{{ u.bottles }}</td>
               <td class="py-1.5">

@@ -122,59 +122,114 @@ export default async function adminRoutes(app: FastifyInstance) {
    */
   app.get('/analytics', async (req) => {
     const days = Math.min(Math.max(Number((req.query as { days?: string }).days) || 30, 1), 365)
-    const since = new Date(Date.now() - days * 86_400_000)
+    const now = Date.now()
+    const since = new Date(now - days * 86_400_000)
     const where = { createdAt: { gte: since } }
 
-    const [byName, registerErrors, addMethods, users, aiCount] = await Promise.all([
-      prisma.event.groupBy({ by: ['name'], where, _count: { _all: true } }),
-      // Motifs d'échec d'inscription (reason est dans props JSON → agrégé en mémoire ci-dessous).
-      prisma.event.findMany({ where: { ...where, name: 'register_error' }, select: { props: true } }),
-      prisma.event.findMany({ where: { ...where, name: 'add_method_selected' }, select: { props: true } }),
+    // Une seule lecture des événements de la fenêtre : tout est calculé en mémoire. À l'échelle
+    // familiale c'est trivial, et ça évite une dizaine d'agrégations séparées.
+    const [events, users, bottleCounts, aiCount] = await Promise.all([
+      prisma.event.findMany({
+        where,
+        select: { name: true, userId: true, anonId: true, props: true, createdAt: true },
+        orderBy: { createdAt: 'asc' },
+      }),
       prisma.user.findMany({
         where: { role: { not: 'ADMIN' } },
         select: { id: true, name: true, email: true, createdAt: true, lastLoginAt: true },
         orderBy: { createdAt: 'desc' },
       }),
+      prisma.bottle.groupBy({
+        by: ['ownerId'],
+        where: { status: 'IN_CELLAR' },
+        _count: { _all: true },
+      }),
       prisma.aiQuery.count({ where: { ...where, error: null } }),
     ])
 
-    const count = (name: string) =>
-      byName.find((row) => row.name === name)?._count._all ?? 0
+    const count = (name: string) => events.filter((e) => e.name === name).length
 
-    // page_view distincts sur l'écran d'inscription = 1re marche du funnel.
-    const registerViews = await prisma.event.findMany({
-      where: { ...where, name: 'page_view' },
-      select: { anonId: true, props: true },
-    })
+    // Funnel d'inscription : 1re marche = anonymes distincts ayant vu l'écran d'inscription.
     const registerPageAnon = new Set(
-      registerViews
-        .filter((e) => safeProps(e.props).name === 'register')
+      events
+        .filter((e) => e.name === 'page_view' && safeProps(e.props).name === 'register')
         .map((e) => e.anonId ?? '?'),
     ).size
 
-    // Activation nominative : quels utilisateurs ont ajouté ≥1 bouteille / se sont connectés.
-    const activity = await prisma.event.groupBy({
-      by: ['userId', 'name'],
-      where: { ...where, userId: { not: null }, name: { in: ['login_success', 'bottle_added'] } },
-      _count: { _all: true },
-    })
-    const bottleCounts = await prisma.bottle.groupBy({
-      by: ['ownerId'],
-      where: { status: 'IN_CELLAR' },
-      _count: { _all: true },
-    })
+    // Frise d'activité : 14 derniers jours, une barre par jour (jours vides inclus).
+    const timelineDays = Math.min(days, 14)
+    const dayKey = (d: Date) => d.toLocaleDateString('en-CA') // YYYY-MM-DD en heure locale
+    const timeline: {
+      date: string
+      total: number
+      pageViews: number
+      searches: number
+      added: number
+    }[] = []
+    const buckets = new Map<string, (typeof timeline)[number]>()
+    for (let i = timelineDays - 1; i >= 0; i--) {
+      const row = {
+        date: dayKey(new Date(now - i * 86_400_000)),
+        total: 0,
+        pageViews: 0,
+        searches: 0,
+        added: 0,
+      }
+      timeline.push(row)
+      buckets.set(row.date, row)
+    }
+    for (const e of events) {
+      const row = buckets.get(dayKey(e.createdAt))
+      if (!row) continue
+      row.total++
+      if (e.name === 'page_view') row.pageViews++
+      else if (e.name === 'search_performed') row.searches++
+      else if (e.name === 'bottle_added') row.added++
+    }
+
+    // Écrans les plus vus (nom seul), et qualité de recherche (avec / sans résultat).
+    const screens = tally(
+      events
+        .filter((e) => e.name === 'page_view')
+        .map((e) => String(safeProps(e.props).name ?? 'inconnu')),
+    )
+    const searchWithResults = events.filter(
+      (e) => e.name === 'search_performed' && safeProps(e.props).hasResults === true,
+    ).length
+    const searchPerformed = count('search_performed')
+
+    // Rétention : utilisateurs identifiés actifs sur les 7 derniers jours vs les 7 précédents.
+    const week = 7 * 86_400_000
+    const activeIn = (from: number, to: number) =>
+      new Set(
+        events
+          .filter((e) => e.userId && e.createdAt.getTime() >= from && e.createdAt.getTime() < to)
+          .map((e) => e.userId),
+      ).size
+
+    // Activité nominative : dernière trace + comptes par utilisateur.
+    const lastSeen = new Map<string, Date>()
+    const loginCount = new Map<string, number>()
+    const addedCount = new Map<string, number>()
+    for (const e of events) {
+      if (!e.userId) continue
+      if (!lastSeen.has(e.userId) || e.createdAt > lastSeen.get(e.userId)!) {
+        lastSeen.set(e.userId, e.createdAt)
+      }
+      if (e.name === 'login_success') loginCount.set(e.userId, (loginCount.get(e.userId) ?? 0) + 1)
+      if (e.name === 'bottle_added') addedCount.set(e.userId, (addedCount.get(e.userId) ?? 0) + 1)
+    }
     const perUser = users.map((u) => {
-      const logins = activity.find((a) => a.userId === u.id && a.name === 'login_success')?._count._all ?? 0
-      const added = activity.find((a) => a.userId === u.id && a.name === 'bottle_added')?._count._all ?? 0
       const bottles = bottleCounts.find((b) => b.ownerId === u.id)?._count._all ?? 0
+      const seen = lastSeen.get(u.id) ?? u.lastLoginAt
       return {
         id: u.id,
         name: u.name,
         email: u.email,
         createdAt: u.createdAt,
-        lastLoginAt: u.lastLoginAt,
-        logins,
-        activated: added > 0 || bottles > 0,
+        lastSeen: seen,
+        logins: loginCount.get(u.id) ?? 0,
+        activated: (addedCount.get(u.id) ?? 0) > 0 || bottles > 0,
         bottles,
       }
     })
@@ -185,21 +240,36 @@ export default async function adminRoutes(app: FastifyInstance) {
         pageViews: registerPageAnon,
         submitted: count('register_submitted'),
         success: count('register_success'),
-        errors: tally(registerErrors.map((e) => String(safeProps(e.props).reason ?? 'inconnu'))),
+        errors: tally(
+          events
+            .filter((e) => e.name === 'register_error')
+            .map((e) => String(safeProps(e.props).reason ?? 'inconnu')),
+        ),
       },
       activation: {
         newUsers: users.filter((u) => u.createdAt >= since).length,
         activatedUsers: perUser.filter((u) => u.activated).length,
         totalUsers: users.length,
       },
+      retention: {
+        activeThisWeek: activeIn(now - week, now + 1),
+        activeLastWeek: activeIn(now - 2 * week, now - week),
+      },
       add: {
-        methods: tally(addMethods.map((e) => String(safeProps(e.props).method ?? 'inconnu'))),
+        methods: tally(
+          events
+            .filter((e) => e.name === 'add_method_selected')
+            .map((e) => String(safeProps(e.props).method ?? 'inconnu')),
+        ),
         bottlesAdded: count('bottle_added'),
       },
       search: {
-        performed: count('search_performed'),
+        performed: searchPerformed,
+        withResults: searchWithResults,
         sommelier: aiCount,
       },
+      screens,
+      timeline,
       users: perUser,
     }
   })

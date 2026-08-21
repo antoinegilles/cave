@@ -3,7 +3,7 @@ import { onMounted, onUnmounted, ref } from 'vue'
 import { api } from '../lib/api'
 
 /**
- * Page d'accueil publique — la vitrine de l'app pour un visiteur non connecté.
+ * Page d'accueil publique la vitrine de l'app pour un visiteur non connecté.
  *
  * Le fil conducteur : un verre de vin qui se remplit à mesure qu'on descend la page. Le
  * niveau est piloté par la progression du défilement (throttlée en rAF). On respecte
@@ -179,14 +179,14 @@ onUnmounted(() => {
           <h3 class="font-display text-xl font-semibold">Le plan qui s'allume</h3>
           <p class="mt-2 text-muted">
             Chaque bouteille occupe un emplacement numéroté. Une recherche, et le bon casier
-            s'illumine — comme une carte au trésor de ta cave.
+            s'illumine comme une carte au trésor de ta cave.
           </p>
         </div>
         <div data-reveal class="reveal rounded-3xl border border-line bg-surface p-7 shadow-card" style="transition-delay: 80ms">
           <div class="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft text-2xl">🍇</div>
           <h3 class="font-display text-xl font-semibold">Un sommelier à la demande</h3>
           <p class="mt-2 text-muted">
-            Décris un plat ou une envie, et l'IA te conseille le vin parfait — parmi ceux que
+            Décris un plat ou une envie, et l'IA te conseille le vin parfait parmi ceux que
             tu possèdes déjà, pas une liste de courses.
           </p>
         </div>
@@ -252,7 +252,7 @@ onUnmounted(() => {
 
     <footer class="border-t border-line">
       <div class="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-4 py-8 text-sm text-muted sm:flex-row">
-        <p>Cave — ta cave à vin, emplacement par emplacement.</p>
+        <p>Cave ta cave à vin, emplacement par emplacement.</p>
         <RouterLink :to="{ name: 'login' }" class="font-semibold text-accent hover:underline">
           Se connecter
         </RouterLink>

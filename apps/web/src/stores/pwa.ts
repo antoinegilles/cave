@@ -23,6 +23,8 @@ export const usePwaStore = defineStore('pwa', () => {
   const updating = ref(false)
   const registrationError = ref(false)
   const installOfferVisible = ref(false)
+  /** Feuille d'instructions iOS, partagée par le menu compte et l'offre proactive. */
+  const iosHelpOpen = ref(false)
 
   let installPrompt: BeforeInstallPromptEvent | null = null
   let updateServiceWorker: ((reloadPage?: boolean) => Promise<void>) | null = null
@@ -171,6 +173,7 @@ export const usePwaStore = defineStore('pwa', () => {
     updating,
     registrationError,
     installOfferVisible,
+    iosHelpOpen,
     initialize,
     promptInstall,
     dismissInstallOffer,

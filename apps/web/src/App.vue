@@ -1,27 +1,22 @@
 <script setup lang="ts">
 import {
-  ArrowDownTrayIcon,
   ArrowPathIcon,
-  ArrowRightStartOnRectangleIcon,
   ChartBarIcon,
   ClockIcon,
-  Cog6ToothIcon,
-  EllipsisVerticalIcon,
   HomeIcon,
   MagnifyingGlassIcon,
-  MoonIcon,
   PlusIcon,
   ShareIcon,
-  SunIcon,
 } from '@heroicons/vue/24/outline'
-import { computed, nextTick, onMounted, onUnmounted, ref, watch, type Component } from 'vue'
+import { computed, watch, type Component } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
+import AccountMenu from './components/AccountMenu.vue'
 import BottomSheet from './components/BottomSheet.vue'
 import NotificationHost from './components/NotificationHost.vue'
+import { useInstallApp } from './lib/useInstallApp'
 import { useAuthStore } from './stores/auth'
 import { useCellarStore } from './stores/cellar'
 import { useNotificationsStore } from './stores/notifications'
-import { usePrefsStore } from './stores/prefs'
 import { usePwaStore } from './stores/pwa'
 
 /**
@@ -40,12 +35,16 @@ import { usePwaStore } from './stores/pwa'
 const auth = useAuthStore()
 const cellar = useCellarStore()
 const notifications = useNotificationsStore()
-const prefs = usePrefsStore()
 const pwa = usePwaStore()
 const route = useRoute()
 const router = useRouter()
+const { installApplication } = useInstallApp()
 
 const showChrome = computed(() => auth.isAuthenticated && !route.meta['public'])
+
+// La barre d'app est masquée sur téléphone dans « Ma cave » : le hero immersif prend sa place
+// (titre, avatar, chiffres). Elle reste sur bureau et sur toutes les autres routes.
+const hideTopBarOnMobile = computed(() => route.name === 'cellar')
 
 interface NavItem {
   name: string
@@ -84,12 +83,6 @@ function isCurrent(item: NavItem): boolean {
   return route.name === item.name
 }
 
-const menuOpen = ref(false)
-const menuRef = ref<HTMLElement | null>(null)
-const menuButton = ref<HTMLButtonElement | null>(null)
-const menuPanel = ref<HTMLElement | null>(null)
-const iosInstallHelpOpen = ref(false)
-
 // Les données Pinia vivent tant que l'onglet reste ouvert. Un changement de session doit
 // donc purger la cave avant que le nouveau compte ne monte sa vue.
 let signedInUserId = auth.user?.id ?? null
@@ -107,89 +100,6 @@ async function leaveViewedCellar(): Promise<void> {
   cellar.stopViewing()
   await router.push({ name: 'cellar' })
   await cellar.loadRacks()
-}
-
-function onDocumentClick(event: MouseEvent): void {
-  if (menuOpen.value && menuRef.value && !menuRef.value.contains(event.target as Node)) {
-    menuOpen.value = false
-  }
-}
-
-function closeMenu(restoreFocus = false): void {
-  if (!menuOpen.value) return
-  menuOpen.value = false
-  if (restoreFocus) menuButton.value?.focus()
-}
-
-function menuItems(): HTMLElement[] {
-  return menuPanel.value
-    ? [...menuPanel.value.querySelectorAll<HTMLElement>('[role="menuitem"]')]
-    : []
-}
-
-async function toggleMenu(): Promise<void> {
-  if (menuOpen.value) {
-    closeMenu(true)
-    return
-  }
-  menuOpen.value = true
-  await nextTick()
-  menuItems()[0]?.focus()
-}
-
-function onMenuKeydown(event: KeyboardEvent): void {
-  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
-  const items = menuItems()
-  if (items.length === 0) return
-  event.preventDefault()
-  const current = Math.max(0, items.indexOf(document.activeElement as HTMLElement))
-  const index =
-    event.key === 'Home'
-      ? 0
-      : event.key === 'End'
-        ? items.length - 1
-        : event.key === 'ArrowDown'
-          ? (current + 1) % items.length
-          : (current - 1 + items.length) % items.length
-  items[index]?.focus()
-}
-
-function onDocumentKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape') closeMenu(true)
-}
-
-onMounted(() => {
-  document.addEventListener('click', onDocumentClick)
-  document.addEventListener('keydown', onDocumentKeydown)
-})
-onUnmounted(() => {
-  document.removeEventListener('click', onDocumentClick)
-  document.removeEventListener('keydown', onDocumentKeydown)
-})
-watch(
-  () => route.fullPath,
-  () => closeMenu(),
-)
-
-async function logout(): Promise<void> {
-  menuOpen.value = false
-  cellar.reset()
-  await auth.logout()
-  router.push({ name: 'login' })
-}
-
-async function installApplication(): Promise<void> {
-  menuOpen.value = false
-  if (pwa.installOfferVisible) pwa.dismissInstallOffer()
-  if (pwa.needsIosInstructions) {
-    iosInstallHelpOpen.value = true
-    return
-  }
-  try {
-    await pwa.promptInstall()
-  } catch {
-    notifications.show("L'installation n'a pas pu être lancée. Réessaie depuis le navigateur.", 'error')
-  }
 }
 
 async function updateApplication(): Promise<void> {
@@ -211,7 +121,11 @@ async function updateApplication(): Promise<void> {
       Aller au contenu
     </a>
 
-    <header v-if="showChrome" class="sticky top-0 z-30 border-b border-line bg-surface/95 backdrop-blur">
+    <header
+      v-if="showChrome"
+      class="sticky top-0 z-30 border-b border-line bg-surface/95 backdrop-blur"
+      :class="hideTopBarOnMobile ? 'hidden md:block' : ''"
+    >
       <div class="mx-auto flex max-w-5xl items-center gap-2 px-3 py-2.5 sm:gap-4 sm:px-4">
         <RouterLink :to="{ name: 'cellar' }" class="tap flex shrink-0 items-center gap-2 rounded-xl">
           <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-accent text-sm font-bold text-accent-text shadow-card" aria-hidden="true">C</span>
@@ -246,101 +160,15 @@ async function updateApplication(): Promise<void> {
             <PlusIcon class="h-5 w-5" aria-hidden="true" /> <span class="hidden lg:inline">Ajouter une bouteille</span>
           </RouterLink>
 
-          <div ref="menuRef" class="relative">
-            <div class="flex items-center rounded-full border border-line bg-surface-2 p-0.5 shadow-card">
-              <span
-                class="flex h-9 w-9 items-center justify-center rounded-full bg-accent-soft text-sm font-bold text-accent"
-                role="img"
-                :aria-label="`Avatar de ${auth.user?.name}`"
-              >
-                {{ auth.user?.name?.charAt(0).toUpperCase() ?? '?' }}
-              </span>
-              <button
-                ref="menuButton"
-                type="button"
-                class="flex h-11 w-11 items-center justify-center rounded-full text-muted transition-colors hover:bg-surface-hover hover:text-text"
-                :aria-expanded="menuOpen"
-                aria-haspopup="menu"
-                aria-controls="account-menu"
-                aria-label="Ouvrir le menu du compte"
-                @click="toggleMenu"
-              >
-                <EllipsisVerticalIcon class="h-5 w-5" aria-hidden="true" />
-              </button>
-            </div>
-
-            <div
-              v-if="menuOpen"
-              id="account-menu"
-              ref="menuPanel"
-              class="absolute right-0 z-40 mt-2 w-72 overflow-hidden rounded-2xl border border-line bg-surface shadow-float"
-              role="menu"
-              @keydown="onMenuKeydown"
-            >
-              <div class="border-b border-line px-4 py-4">
-                <p class="font-semibold text-text">{{ auth.user?.name }}</p>
-                <p class="truncate text-sm text-muted">{{ auth.user?.email }}</p>
-              </div>
-
-              <button
-                type="button"
-                role="menuitem"
-                class="flex w-full items-center gap-3 px-4 py-3 text-left text-text transition-colors hover:bg-surface-hover"
-                @click="prefs.toggleTheme"
-              >
-                <SunIcon v-if="prefs.theme === 'dark'" class="h-5 w-5 text-muted" aria-hidden="true" />
-                <MoonIcon v-else class="h-5 w-5 text-muted" aria-hidden="true" />
-                {{ prefs.theme === 'dark' ? 'Utiliser le thème clair' : 'Utiliser le thème sombre' }}
-              </button>
-
-              <button
-                v-if="pwa.canInstall"
-                type="button"
-                role="menuitem"
-                class="flex w-full items-center gap-3 px-4 py-3 text-left text-text transition-colors hover:bg-surface-hover"
-                @click="installApplication"
-              >
-                <ArrowDownTrayIcon class="h-5 w-5 text-muted" aria-hidden="true" />
-                Installer l'application
-              </button>
-
-              <RouterLink
-                v-if="!cellar.isReadOnly"
-                :to="{ name: 'rack-settings' }"
-                role="menuitem"
-                class="flex items-center gap-3 px-4 py-3 text-text transition-colors hover:bg-surface-hover"
-                @click="menuOpen = false"
-              >
-                <Cog6ToothIcon class="h-5 w-5 text-muted" aria-hidden="true" /> Réglages de ma cave
-              </RouterLink>
-
-              <RouterLink
-                v-if="auth.isAdmin"
-                :to="{ name: 'admin' }"
-                role="menuitem"
-                class="flex items-center gap-3 px-4 py-3 text-text transition-colors hover:bg-surface-hover"
-                @click="menuOpen = false"
-              >
-                <Cog6ToothIcon class="h-5 w-5 text-muted" aria-hidden="true" /> Administration
-              </RouterLink>
-
-              <button
-                type="button"
-                role="menuitem"
-                class="flex w-full items-center gap-3 px-4 py-3 text-left text-danger transition-colors hover:bg-surface-hover"
-                @click="logout"
-              >
-                <ArrowRightStartOnRectangleIcon class="h-5 w-5" aria-hidden="true" /> Se déconnecter
-              </button>
-            </div>
-          </div>
+          <AccountMenu align="right" />
         </div>
       </div>
     </header>
 
     <div
       v-if="showChrome && cellar.viewingUser"
-      class="sticky top-[65px] z-20 border-b border-warning bg-warning-soft px-4 py-2.5 text-warning"
+      class="sticky z-20 border-b border-warning bg-warning-soft px-4 py-2.5 text-warning"
+      :class="hideTopBarOnMobile ? 'top-0 md:top-[65px]' : 'top-[65px]'"
     >
       <div class="mx-auto flex max-w-5xl items-center justify-between gap-3">
         <p class="text-sm font-semibold">
@@ -401,7 +229,16 @@ async function updateApplication(): Promise<void> {
       </div>
     </div>
 
-    <main id="contenu" class="mx-auto max-w-5xl px-3 py-5 sm:px-4 sm:py-7" :class="showChrome ? 'pb-28 md:pb-10' : ''">
+    <main
+      id="contenu"
+      class="mx-auto max-w-5xl px-3 sm:px-4"
+      :class="[
+        showChrome ? 'pb-28 md:pb-10' : 'pb-7',
+        // Sur téléphone dans « Ma cave », le hero démarre en haut (il gère l'encoche lui-même) ;
+        // ailleurs, padding vertical normal.
+        hideTopBarOnMobile ? 'pt-0 md:pt-7' : 'pt-5 sm:pt-7',
+      ]"
+    >
       <RouterView :key="`${String(route.name)}:${cellar.viewingUser?.id ?? 'self'}`" />
     </main>
 
@@ -472,9 +309,9 @@ async function updateApplication(): Promise<void> {
     </BottomSheet>
 
     <BottomSheet
-      :open="iosInstallHelpOpen"
+      :open="pwa.iosHelpOpen"
       title="Installer Cave sur cet appareil"
-      @close="iosInstallHelpOpen = false"
+      @close="pwa.iosHelpOpen = false"
     >
       <div class="space-y-4 text-text">
         <p>
@@ -495,7 +332,7 @@ async function updateApplication(): Promise<void> {
         <button
           type="button"
           class="w-full rounded-xl bg-accent px-4 py-3 font-semibold text-accent-text hover:bg-accent-hover"
-          @click="iosInstallHelpOpen = false"
+          @click="pwa.iosHelpOpen = false"
         >
           J'ai compris
         </button>

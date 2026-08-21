@@ -3,10 +3,10 @@ import { ChevronDownIcon, ChevronUpIcon } from '@heroicons/vue/20/solid'
 import { computed, nextTick, onMounted, ref, useId, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import BottleList from '../components/BottleList.vue'
+import CellarHero from '../components/CellarHero.vue'
 import RackGrid from '../components/RackGrid.vue'
 import SearchPanel from '../components/SearchPanel.vue'
 import SlotSheet from '../components/SlotSheet.vue'
-import { plural } from '../lib/format'
 import { useHoverPointer, useReducedMotion } from '../lib/useMediaQuery'
 import type { SlotView } from '../lib/types'
 import { useCellarStore } from '../stores/cellar'
@@ -142,9 +142,7 @@ function openBottle(bottleId: string): void {
 </script>
 
 <template>
-  <div class="space-y-5">
-    <SearchPanel ref="searchPanel" />
-
+  <div class="space-y-4">
     <p v-if="cellar.loading" class="py-16 text-center text-muted">Chargement de la cave…</p>
 
     <p
@@ -172,10 +170,9 @@ function openBottle(bottleId: string): void {
     </div>
 
     <template v-else>
-      <p class="px-1 text-sm text-muted">
-        {{ plural(totalWines, 'vin') }} · {{ plural(cellar.totalBottles, 'bouteille') }} ·
-        {{ cellar.totalSlots }} emplacements
-      </p>
+      <!-- Hero immersif + recherche, groupés en haut de l'écran. -->
+      <CellarHero :wines="totalWines" />
+      <SearchPanel ref="searchPanel" />
 
       <!-- Bouteilles sans emplacement : invisibles sur le plan, sinon. Repliée par défaut,
            visible quel que soit le mode d'affichage choisi. -->

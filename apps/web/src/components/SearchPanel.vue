@@ -84,17 +84,6 @@ const hasFilters = computed(() => activeFilterCount.value > 0)
 
 const quotaRemaining = computed(() => sommelier.value?.remaining ?? 0)
 
-/** Ce que ferait une validation maintenant — sert à annoncer le mode à l'avance. */
-const pendingDecision = computed(() =>
-  decideSearchMode(query.value, {
-    submitted: true,
-    statusAvailable: sommelier.value !== null && !sommelierStatusError.value,
-    featureEnabled: sommelier.value?.featureEnabled ?? false,
-    configured: sommelier.value?.configured ?? false,
-    quotaRemaining: quotaRemaining.value,
-  }),
-)
-
 async function loadSommelierStatus(): Promise<void> {
   const controller = new AbortController()
   const timeout = window.setTimeout(() => controller.abort(), 8_000)
@@ -334,76 +323,45 @@ const thinkingDetail = computed(() => {
   if (total === 0) return 'Il regarde ta cave…'
   return `Il passe en revue ${plural(total, 'bouteille')} pour te répondre.`
 })
-
-/** Ce que ferait une validation maintenant, en une ligne. */
-const modeHint = computed(() => {
-  if (sommelierStatusError.value) {
-    return 'Recherche classique — état du sommelier indisponible'
-  }
-  if (!sommelier.value) return 'Vérification du sommelier en cours…'
-  if (!sommelier.value.featureEnabled) return 'Recherche classique — sommelier désactivé'
-  if (!sommelier.value.configured) return 'Recherche classique — clé Gemini absente'
-  if (quotaRemaining.value <= 0) {
-    return 'Le sommelier a fini sa journée — recherche classique jusqu’à demain'
-  }
-  if (!query.value.trim() || cellar.searchActive || searching.value) return null
-  if (pendingDecision.value.mode === 'ai') {
-    return `Le sommelier analysera ta cave — ${plural(quotaRemaining.value, 'conseil')} restant${quotaRemaining.value > 1 ? 's' : ''} aujourd'hui`
-  }
-  return 'Recherche classique — saisis au moins 3 caractères pour interroger aussi le sommelier'
-})
 </script>
 
 <template>
   <section class="space-y-3">
+    <!-- Recherche : loupe à gauche, pastille IA (quota sommelier) à droite, à l'intérieur. -->
     <div class="relative">
-        <label for="cave-search" class="sr-only">Rechercher un vin</label>
-        <input
-          id="cave-search"
-          ref="input"
-          v-model="query"
-          type="search"
-          placeholder="Un plat, un domaine..."
-          class="w-full rounded-2xl border border-line bg-surface py-3.5 pl-4 pr-14 text-text shadow-card outline-none focus:border-accent"
-          @keydown.enter="submit"
-        />
-      <button
-        type="button"
-        class="absolute right-1.5 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-xl bg-accent text-accent-text transition-colors hover:bg-accent-hover disabled:opacity-50"
-        :disabled="searching"
-        aria-label="Lancer la recherche"
-        @click="submit"
-      >
-        <MagnifyingGlassIcon class="h-5 w-5" :class="searching ? 'motion-safe:animate-pulse' : ''" aria-hidden="true" />
-      </button>
-    </div>
-
-    <!-- Ligne d'état : annonce le mode AVANT validation, et porte le quota sur téléphone. -->
-    <p
-      v-if="modeHint || sommelier"
-      class="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-sm text-faint"
-    >
-      <span v-if="modeHint">{{ modeHint }}</span>
+      <label for="cave-search" class="sr-only">Rechercher un vin</label>
+      <MagnifyingGlassIcon
+        class="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2"
+        :class="searching ? 'text-accent motion-safe:animate-pulse' : 'text-faint'"
+        aria-hidden="true"
+      />
+      <input
+        id="cave-search"
+        ref="input"
+        v-model="query"
+        type="search"
+        placeholder="Un plat, un domaine…"
+        class="w-full rounded-2xl border border-line bg-surface py-3.5 pl-12 text-text shadow-card outline-none focus:border-accent"
+        :class="sommelier?.featureEnabled && sommelier.configured ? 'pr-20' : 'pr-4'"
+        @keydown.enter="submit"
+      />
       <span
         v-if="sommelier?.featureEnabled && sommelier.configured"
-        class="inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-sm font-semibold tabular-nums"
-        :class="
-          quotaRemaining > 0
-            ? 'border-accent bg-accent-soft text-accent'
-            : 'border-line bg-surface-2 text-faint'
-        "
+        class="absolute right-2 top-1/2 inline-flex -translate-y-1/2 items-center gap-1 rounded-full px-2.5 py-1 text-sm font-semibold tabular-nums"
+        :class="quotaRemaining > 0 ? 'bg-accent-soft text-accent' : 'bg-surface-2 text-faint'"
+        :title="`${quotaRemaining} recherche(s) sommelier restante(s) aujourd'hui`"
       >
-        <SparklesIcon class="h-4 w-4" aria-hidden="true" /> {{ quotaRemaining }}/{{ sommelier.dailyQuota }}
+        <SparklesIcon class="h-3.5 w-3.5" aria-hidden="true" />{{ quotaRemaining }}
         <span class="sr-only">recherches sommelier restantes aujourd'hui</span>
       </span>
-    </p>
+    </div>
 
-    <!-- Organisation de la collection : une seule barre compacte, disponible à 320 px. -->
-    <div class="flex flex-wrap items-center gap-1 rounded-2xl border border-line bg-surface p-1.5 shadow-card" aria-label="Organiser la collection">
+    <!-- Contrôles épurés : Filtres · Tri (libellé + menu) · bascule liste/plan. -->
+    <div class="flex flex-wrap items-center gap-2" aria-label="Organiser la collection">
       <button
         type="button"
-        class="inline-flex items-center gap-1.5 rounded-xl px-2.5 text-sm font-medium transition-colors"
-        :class="showFilters || hasFilters ? 'bg-accent-soft text-accent' : 'text-muted hover:bg-surface-hover hover:text-text'"
+        class="inline-flex min-h-11 items-center gap-1.5 rounded-xl border px-3 text-sm font-medium transition-colors"
+        :class="showFilters || hasFilters ? 'border-accent bg-accent-soft text-accent' : 'border-line bg-surface text-muted hover:bg-surface-hover hover:text-text'"
         :aria-expanded="showFilters"
         @click="showFilters = !showFilters"
       >
@@ -411,30 +369,33 @@ const modeHint = computed(() => {
         Filtres<span v-if="activeFilterCount" class="rounded-full bg-accent px-1.5 text-xs text-accent-text">{{ activeFilterCount }}</span>
       </button>
 
-      <div class="h-6 w-px bg-line" aria-hidden="true" />
-
-      <div class="flex min-w-0 flex-1 overflow-x-auto" aria-label="Trier les vins">
-        <button
-          v-for="option in SORTS"
-          :key="option.key"
-          type="button"
-          class="inline-flex shrink-0 items-center gap-1 rounded-lg px-2 text-xs font-medium transition-colors sm:text-sm"
-          :class="prefs.listSort === option.key ? 'text-accent' : 'text-muted hover:bg-surface-hover hover:text-text'"
-          :aria-label="prefs.listSort === option.key ? `Trier par ${option.label}, ordre ${prefs.listSortDirection === 'asc' ? 'croissant' : 'décroissant'}` : `Trier par ${option.label}`"
-          :aria-pressed="prefs.listSort === option.key"
-          @click="prefs.selectSort(option.key)"
+      <div class="inline-flex min-h-11 items-center rounded-xl border border-line bg-surface pl-3 pr-1 text-sm">
+        <span class="text-muted">Tri&nbsp;:</span>
+        <label for="cave-sort" class="sr-only">Trier les vins par</label>
+        <select
+          id="cave-sort"
+          class="min-h-11 border-0 bg-transparent pl-1 pr-1 font-medium text-text outline-none focus-visible:outline-none"
+          :value="prefs.listSort"
+          @change="prefs.selectSort(($event.target as HTMLSelectElement).value as ListSort)"
         >
-          {{ option.label }}
-          <ArrowUpIcon v-if="prefs.listSort === option.key && prefs.listSortDirection === 'asc'" class="h-3.5 w-3.5" aria-hidden="true" />
-          <ArrowDownIcon v-else-if="prefs.listSort === option.key" class="h-3.5 w-3.5" aria-hidden="true" />
+          <option v-for="option in SORTS" :key="option.key" :value="option.key">{{ option.label }}</option>
+        </select>
+        <button
+          type="button"
+          class="flex h-9 w-9 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-hover hover:text-text"
+          :aria-label="`Ordre ${prefs.listSortDirection === 'asc' ? 'croissant' : 'décroissant'}, inverser`"
+          @click="prefs.selectSort(prefs.listSort)"
+        >
+          <ArrowUpIcon v-if="prefs.listSortDirection === 'asc'" class="h-4 w-4" aria-hidden="true" />
+          <ArrowDownIcon v-else class="h-4 w-4" aria-hidden="true" />
         </button>
       </div>
 
-      <div class="flex rounded-xl bg-surface-2 p-0.5" role="group" aria-label="Mode d'affichage">
+      <div class="ml-auto flex rounded-xl border border-line bg-surface p-0.5" role="group" aria-label="Mode d'affichage">
         <button
           type="button"
-          class="flex h-11 w-11 items-center justify-center rounded-lg transition-colors"
-          :class="prefs.viewMode === 'list' ? 'bg-surface text-accent shadow-card' : 'text-muted hover:text-text'"
+          class="flex h-10 w-10 items-center justify-center rounded-lg transition-colors"
+          :class="prefs.viewMode === 'list' ? 'bg-accent-soft text-accent' : 'text-muted hover:text-text'"
           :aria-pressed="prefs.viewMode === 'list'"
           aria-label="Afficher la liste"
           @click="prefs.viewMode = 'list'"
@@ -443,8 +404,8 @@ const modeHint = computed(() => {
         </button>
         <button
           type="button"
-          class="flex h-11 w-11 items-center justify-center rounded-lg transition-colors"
-          :class="prefs.viewMode === 'rack' ? 'bg-surface text-accent shadow-card' : 'text-muted hover:text-text'"
+          class="flex h-10 w-10 items-center justify-center rounded-lg transition-colors"
+          :class="prefs.viewMode === 'rack' ? 'bg-accent-soft text-accent' : 'text-muted hover:text-text'"
           :aria-pressed="prefs.viewMode === 'rack'"
           aria-label="Afficher le plan du casier"
           @click="prefs.viewMode = 'rack'"

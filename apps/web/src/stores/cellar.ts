@@ -71,6 +71,14 @@ export const useCellarStore = defineStore('cellar', () => {
 
   const totalSlots = computed(() => racks.value.reduce((sum, rack) => sum + rack.slots.length, 0))
 
+  /** Emplacements réellement libres = total − occupés. Le hero affiche « places libres ». */
+  const freeSlots = computed(() =>
+    racks.value.reduce(
+      (sum, rack) => sum + rack.slots.filter((slot) => slot.bottles.length === 0).length,
+      0,
+    ),
+  )
+
   function slotKey(rackId: string, slotNumber: number): string {
     return `${rackId}:${slotNumber}`
   }
@@ -241,6 +249,7 @@ export const useCellarStore = defineStore('cellar', () => {
     matchedByRack,
     totalBottles,
     totalSlots,
+    freeSlots,
     slotKey,
     readPath,
     startViewing,

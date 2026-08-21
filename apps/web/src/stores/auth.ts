@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
+import { setAnalyticsEnabled } from '../lib/analytics'
 import {
   api,
   isNetworkError,
@@ -57,6 +58,8 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = data.user
     sessionNeedsValidation.value = false
     writeCachedUser(data.user)
+    // Exclusion admin du traçage (garde côté client ; le serveur l'applique aussi).
+    setAnalyticsEnabled(data.user.role !== 'ADMIN')
   }
 
   function clearSession(): void {
@@ -64,6 +67,8 @@ export const useAuthStore = defineStore('auth', () => {
     sessionNeedsValidation.value = false
     setAccessToken(null)
     writeCachedUser(null)
+    // Déconnecté = anonyme : on réactive (funnel d'inscription notamment).
+    setAnalyticsEnabled(true)
   }
 
   async function refreshSession(signal?: AbortSignal): Promise<void> {

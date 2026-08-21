@@ -2,6 +2,7 @@ import { createPinia } from 'pinia'
 import { createApp, watch } from 'vue'
 import App from './App.vue'
 import './assets/main.css'
+import { initAnalytics } from './lib/analytics'
 import router from './router'
 import { useAuthStore } from './stores/auth'
 import { usePwaStore } from './stores/pwa'
@@ -10,6 +11,10 @@ async function bootstrap(): Promise<void> {
   const app = createApp(App)
   const pinia = createPinia()
   app.use(pinia)
+
+  // Traçage produit : garantit l'anonId et branche le flush aux fermetures d'onglet. Le store
+  // auth ajuste ensuite l'activation selon le rôle (les admins sont exclus).
+  initAnalytics()
 
   // Les événements d'installation et de connectivité peuvent arriver dès le chargement :
   // on les écoute avant toute tentative réseau de restauration de session.

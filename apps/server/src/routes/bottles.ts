@@ -12,6 +12,7 @@ import type { FastifyInstance } from 'fastify'
 import { resolveCellarOwner } from '../lib/ownership.js'
 import { prisma } from '../lib/prisma.js'
 import { enrichWineData } from '../providers/heuristics.js'
+import { logEvent } from '../services/events.js'
 import { searchBottles } from '../services/search.js'
 import { serializeBottle } from '../services/serialize.js'
 import { drinkingWindow, upsertWine } from '../services/wines.js'
@@ -216,7 +217,13 @@ export default async function bottleRoutes(app: FastifyInstance) {
     if (!parsed.success) {
       return reply.code(400).send({ error: 'Requête invalide', issues: parsed.error.issues })
     }
-    return searchBottles(parsed.data, await resolveCellarOwner(req))
+    const result = await searchBottles(parsed.data, await resolveCellarOwner(req))
+    await logEvent('search_performed', {
+      userId: req.currentUser!.id,
+      userRole: req.currentUser!.role,
+      props: { total: result.total, hasResults: result.total > 0 },
+    })
+    return result
   })
 
   app.post('/', async (req, reply) => {
@@ -263,6 +270,13 @@ export default async function bottleRoutes(app: FastifyInstance) {
       })
     }
 
+    // Toutes les bouteilles créées par cette route occupent un emplacement (placed: true).
+    await logEvent('bottle_added', {
+      userId: req.currentUser!.id,
+      userRole: req.currentUser!.role,
+      props: { count: result.length, placed: true },
+    })
+
     return reply.code(201).send({ bottle: result[0], bottles: result })
   })
 
@@ -275,7 +289,13 @@ export default async function bottleRoutes(app: FastifyInstance) {
     const { bottleIds, ...tasting } = parsed.data
 
     try {
-      return await drinkBottles(req.currentUser!.id, bottleIds, tasting)
+      const drunk = await drinkBottles(req.currentUser!.id, bottleIds, tasting)
+      await logEvent('bottle_drunk', {
+        userId: req.currentUser!.id,
+        userRole: req.currentUser!.role,
+        props: { count: bottleIds.length },
+      })
+      return drunk
     } catch (error) {
       if (!(error instanceof BottleDrinkConflictError)) throw error
       if (error.missingBottleIds.length > 0) {

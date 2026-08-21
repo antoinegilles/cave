@@ -1,5 +1,6 @@
 import { nextTick } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
+import { track } from './lib/analytics'
 import { api } from './lib/api'
 import { useAuthStore } from './stores/auth'
 import { useCellarStore } from './stores/cellar'
@@ -75,6 +76,12 @@ router.beforeEach(async (to) => {
   }
   if (to.meta['write'] && cellar.isReadOnly) return { name: 'cellar' }
   return true
+})
+
+// Traçage : une page vue par navigation, nom d'écran seul (rien de sensible). Le module
+// analytics ignore l'appel pour les comptes admin.
+router.afterEach((to) => {
+  if (typeof to.name === 'string') track('page_view', { name: to.name })
 })
 
 export default router

@@ -60,3 +60,27 @@ export const AI_PROMPT_MAX_LENGTH = 250
 export const FEATURE_FLAGS = {
   AI_SOMMELIER: 'ai_sommelier',
 } as const
+
+/**
+ * Vocabulaire d'événements du traçage produit (analytics maison, nominatif).
+ *
+ * Allowlist unique, partagée front/back : le serveur rejette tout `name` hors de cette liste
+ * pour que la table `Event` ne se remplisse pas de bruit arbitraire. Les valeurs sont
+ * persistées — ne pas renommer sans y penser. Origine indiquée en commentaire.
+ */
+export const EVENT_NAMES = [
+  'page_view', //          client — navigation, props { name } (nom d'écran seul)
+  'register_submitted', // client — formulaire d'inscription soumis
+  'register_success', //   serveur — compte créé (autoritaire)
+  'register_error', //     serveur — inscription refusée, props { reason }
+  'login_success', //      serveur — connexion réussie
+  'add_method_selected', //client — voie de saisie choisie, props { method }
+  'bottle_added', //       serveur — exemplaire(s) créé(s), props { count, placed }
+  'bottle_drunk', //       serveur — exemplaire(s) ouvert(s), props { count }
+  'search_performed', //   serveur — recherche classique, props { total, hasResults }
+] as const
+export type EventName = (typeof EVENT_NAMES)[number]
+
+/** Voies de saisie d'un ajout de bouteille (props de `add_method_selected`). */
+export const ADD_METHODS = ['photo', 'barcode', 'manual'] as const
+export type AddMethod = (typeof ADD_METHODS)[number]

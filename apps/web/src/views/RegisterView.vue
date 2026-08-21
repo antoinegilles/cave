@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import PasswordField from '../components/PasswordField.vue'
+import { getAnonId, track } from '../lib/analytics'
 import { ApiError, api, setAccessToken } from '../lib/api'
 import { useAuthStore } from '../stores/auth'
 
@@ -47,6 +48,10 @@ async function submit(): Promise<void> {
   loading.value = true
   error.value = null
 
+  // 2e marche du funnel d'inscription (la 1re, page vue, part du routeur). L'anonId lie ces
+  // pas anonymes au compte créé côté serveur.
+  track('register_submitted')
+
   try {
     const data = await api.post<{ accessToken: string; user: typeof auth.user }>(
       '/api/auth/register',
@@ -54,6 +59,7 @@ async function submit(): Promise<void> {
         name: name.value.trim(),
         email: email.value.trim(),
         password: password.value,
+        anonId: getAnonId(),
         ...(requiresInviteCode.value ? { inviteCode: inviteCode.value.trim() } : {}),
       },
     )

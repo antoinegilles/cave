@@ -7,6 +7,23 @@ import { hashPassword } from '../lib/password.js'
 import { prisma } from '../lib/prisma.js'
 import { vivinoBreaker } from '../providers/vivino.js'
 
+/** Les props d'un événement sont du TEXT JSON (SQLite) : on parse défensivement. */
+function safeProps(raw: string): Record<string, unknown> {
+  try {
+    const value = JSON.parse(raw)
+    return value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
+  } catch {
+    return {}
+  }
+}
+
+/** Compte les occurrences de chaque valeur : `['photo','photo','manual'] → {photo:2, manual:1}`. */
+function tally(values: string[]): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const value of values) out[value] = (out[value] ?? 0) + 1
+  return out
+}
+
 export default async function adminRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.requireAdmin)
 
@@ -94,6 +111,96 @@ export default async function adminRoutes(app: FastifyInstance) {
       counts: { users, bottles, wines, cacheEntries, aiQueriesLast7Days: aiWeek },
       vivino: { enabled: config.VIVINO_ENABLED, ...vivinoBreaker.status },
       ai: { dailyQuotaPerUser: config.AI_DAILY_QUOTA, grounding: config.AI_ENABLE_GROUNDING },
+    }
+  })
+
+  /**
+   * Traçage des parcours (analytics maison). Agrège la table `Event` sur une fenêtre glissante :
+   * funnel d'inscription, activation/rétention nominative, méthodes d'ajout, usage recherche.
+   * Les comptes ADMIN étant exclus à l'écriture, ces chiffres ne reflètent que les vrais
+   * utilisateurs.
+   */
+  app.get('/analytics', async (req) => {
+    const days = Math.min(Math.max(Number((req.query as { days?: string }).days) || 30, 1), 365)
+    const since = new Date(Date.now() - days * 86_400_000)
+    const where = { createdAt: { gte: since } }
+
+    const [byName, registerErrors, addMethods, users, aiCount] = await Promise.all([
+      prisma.event.groupBy({ by: ['name'], where, _count: { _all: true } }),
+      // Motifs d'échec d'inscription (reason est dans props JSON → agrégé en mémoire ci-dessous).
+      prisma.event.findMany({ where: { ...where, name: 'register_error' }, select: { props: true } }),
+      prisma.event.findMany({ where: { ...where, name: 'add_method_selected' }, select: { props: true } }),
+      prisma.user.findMany({
+        where: { role: { not: 'ADMIN' } },
+        select: { id: true, name: true, email: true, createdAt: true, lastLoginAt: true },
+        orderBy: { createdAt: 'desc' },
+      }),
+      prisma.aiQuery.count({ where: { ...where, error: null } }),
+    ])
+
+    const count = (name: string) =>
+      byName.find((row) => row.name === name)?._count._all ?? 0
+
+    // page_view distincts sur l'écran d'inscription = 1re marche du funnel.
+    const registerViews = await prisma.event.findMany({
+      where: { ...where, name: 'page_view' },
+      select: { anonId: true, props: true },
+    })
+    const registerPageAnon = new Set(
+      registerViews
+        .filter((e) => safeProps(e.props).name === 'register')
+        .map((e) => e.anonId ?? '?'),
+    ).size
+
+    // Activation nominative : quels utilisateurs ont ajouté ≥1 bouteille / se sont connectés.
+    const activity = await prisma.event.groupBy({
+      by: ['userId', 'name'],
+      where: { ...where, userId: { not: null }, name: { in: ['login_success', 'bottle_added'] } },
+      _count: { _all: true },
+    })
+    const bottleCounts = await prisma.bottle.groupBy({
+      by: ['ownerId'],
+      where: { status: 'IN_CELLAR' },
+      _count: { _all: true },
+    })
+    const perUser = users.map((u) => {
+      const logins = activity.find((a) => a.userId === u.id && a.name === 'login_success')?._count._all ?? 0
+      const added = activity.find((a) => a.userId === u.id && a.name === 'bottle_added')?._count._all ?? 0
+      const bottles = bottleCounts.find((b) => b.ownerId === u.id)?._count._all ?? 0
+      return {
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        createdAt: u.createdAt,
+        lastLoginAt: u.lastLoginAt,
+        logins,
+        activated: added > 0 || bottles > 0,
+        bottles,
+      }
+    })
+
+    return {
+      windowDays: days,
+      registration: {
+        pageViews: registerPageAnon,
+        submitted: count('register_submitted'),
+        success: count('register_success'),
+        errors: tally(registerErrors.map((e) => String(safeProps(e.props).reason ?? 'inconnu'))),
+      },
+      activation: {
+        newUsers: users.filter((u) => u.createdAt >= since).length,
+        activatedUsers: perUser.filter((u) => u.activated).length,
+        totalUsers: users.length,
+      },
+      add: {
+        methods: tally(addMethods.map((e) => String(safeProps(e.props).method ?? 'inconnu'))),
+        bottlesAdded: count('bottle_added'),
+      },
+      search: {
+        performed: count('search_performed'),
+        sommelier: aiCount,
+      },
+      users: perUser,
     }
   })
 

@@ -11,6 +11,7 @@ import adminRoutes from './routes/admin.js'
 import aiRoutes from './routes/ai.js'
 import authRoutes from './routes/auth.js'
 import bottleRoutes from './routes/bottles.js'
+import eventRoutes from './routes/events.js'
 import rackRoutes from './routes/racks.js'
 import statsRoutes from './routes/stats.js'
 import wineRoutes from './routes/wines.js'
@@ -65,6 +66,7 @@ await app.register(wineRoutes, { prefix: '/api/wines' })
 await app.register(aiRoutes, { prefix: '/api/ai' })
 await app.register(statsRoutes, { prefix: '/api/stats' })
 await app.register(adminRoutes, { prefix: '/api/admin' })
+await app.register(eventRoutes, { prefix: '/api/events' })
 
 // Une seule image Docker sert l'API et le SPA compilé : c'est ce qui rend le branchement
 // derrière un Caddy partagé trivial (un seul reverse_proxy, pas de CORS).

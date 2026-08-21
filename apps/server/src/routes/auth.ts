@@ -5,6 +5,7 @@ import { defaultCellarCreate } from '../lib/defaultCellar.js'
 import { hashPassword, verifyPassword } from '../lib/password.js'
 import { prisma } from '../lib/prisma.js'
 import { REFRESH_COOKIE, hashToken, refreshCookieOptions } from '../plugins/auth.js'
+import { logEvent } from '../services/events.js'
 
 export default async function authRoutes(app: FastifyInstance) {
   /** Public : indique au client s'il doit afficher le lien « Créer un compte ». */
@@ -17,12 +18,18 @@ export default async function authRoutes(app: FastifyInstance) {
     // Une inscription publique est une surface d'abus : on borne fortement les tentatives.
     config: { rateLimit: { max: 5, timeWindow: '15 minutes' } },
     handler: async (req, reply) => {
+      // Best-effort pour recoudre le funnel : présent même si le corps est par ailleurs invalide.
+      const anonId = (req.body as { anonId?: unknown })?.anonId
+      const anon = typeof anonId === 'string' ? anonId : null
+
       if (config.REGISTRATION_MODE === 'closed') {
+        await logEvent('register_error', { anonId: anon, props: { reason: 'closed' } })
         return reply.code(403).send({ error: 'Les inscriptions sont fermées.' })
       }
 
       const parsed = registerSchema.safeParse(req.body)
       if (!parsed.success) {
+        await logEvent('register_error', { anonId: anon, props: { reason: 'invalid' } })
         return reply.code(400).send({
           error: parsed.error.issues[0]?.message ?? 'Requête invalide',
           issues: parsed.error.issues,
@@ -33,11 +40,19 @@ export default async function authRoutes(app: FastifyInstance) {
         config.REGISTRATION_MODE === 'invite' &&
         parsed.data.inviteCode !== config.REGISTRATION_INVITE_CODE
       ) {
+        await logEvent('register_error', {
+          anonId: parsed.data.anonId ?? null,
+          props: { reason: 'invite_code' },
+        })
         return reply.code(403).send({ error: 'Code d’invitation invalide.' })
       }
 
       const email = parsed.data.email.toLowerCase()
       if (await prisma.user.findUnique({ where: { email } })) {
+        await logEvent('register_error', {
+          anonId: parsed.data.anonId ?? null,
+          props: { reason: 'email_taken' },
+        })
         return reply.code(409).send({ error: 'Un compte existe déjà avec cette adresse.' })
       }
 
@@ -57,6 +72,14 @@ export default async function authRoutes(app: FastifyInstance) {
           },
         }),
       )
+
+      // Le succès porte l'anonId : c'est lui qui relie les pas anonymes (page vue, formulaire
+      // soumis) au compte fraîchement créé. `userRole` exclut le tout premier compte (ADMIN).
+      await logEvent('register_success', {
+        userId: user.id,
+        userRole: user.role,
+        anonId: parsed.data.anonId ?? null,
+      })
 
       // On connecte directement : demander de se reconnecter juste après s'être
       // inscrit n'apporte rien et fait perdre du monde en route.
@@ -93,6 +116,7 @@ export default async function authRoutes(app: FastifyInstance) {
       }
 
       await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } })
+      await logEvent('login_success', { userId: user.id, userRole: user.role })
 
       const refreshToken = await app.issueSession(user.id, req.headers['user-agent'])
       const accessToken = app.jwt.sign({ sub: user.id, role: user.role })

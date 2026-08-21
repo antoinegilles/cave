@@ -24,6 +24,7 @@ model User {
   bottles   Bottle[]
   aiQueries AiQuery[]
   sessions  Session[]
+  events    Event[]
 }
 
 /// Refresh tokens. Stockés hashés pour qu'une fuite de la base ne donne pas de session valide.
@@ -185,6 +186,26 @@ model FeatureFlag {
   key       String   @id
   enabled   Boolean  @default(false)
   updatedAt DateTime @updatedAt
+}
+
+/// Journal d'événements produit : traçage nominatif des parcours (inscription, ajout,
+/// recherche). Même esprit qu'AiQuery — en base pour survivre aux redémarrages, analysé
+/// depuis l'Admin. Les comptes ADMIN sont exclus à l'écriture. `props` = Json sérialisé
+/// (SQLite sans type JSON), volontairement petit et sans donnée personnelle.
+model Event {
+  id        String   @id @default(cuid())
+  name      String // allowlist @cave/shared EVENT_NAMES
+  userId    String? // nominatif quand connu ; null avant authentification
+  anonId    String? // id anonyme (localStorage) pour recoudre le funnel d'inscription
+  props     String   @default("{}")
+  path      String?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([name, createdAt])
+  @@index([userId])
+  @@index([anonId])
 }
 
 /// Cache permanent des pages scrapées : un vin n'est récupéré qu'une seule fois.

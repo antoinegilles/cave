@@ -29,6 +29,29 @@ interface StatusRow {
   vivino: { enabled: boolean; open: boolean; failures: number; retryAt: string | null }
   ai: { dailyQuotaPerUser: number; grounding: boolean }
 }
+interface AnalyticsUserRow {
+  id: string
+  name: string
+  email: string
+  createdAt: string
+  lastLoginAt: string | null
+  logins: number
+  activated: boolean
+  bottles: number
+}
+interface AnalyticsRow {
+  windowDays: number
+  registration: {
+    pageViews: number
+    submitted: number
+    success: number
+    errors: Record<string, number>
+  }
+  activation: { newUsers: number; activatedUsers: number; totalUsers: number }
+  add: { methods: Record<string, number>; bottlesAdded: number }
+  search: { performed: number; sommelier: number }
+  users: AnalyticsUserRow[]
+}
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -36,6 +59,7 @@ const router = useRouter()
 const users = ref<UserRow[]>([])
 const flags = ref<FlagRow[]>([])
 const status = ref<StatusRow | null>(null)
+const analytics = ref<AnalyticsRow | null>(null)
 const message = ref<string | null>(null)
 const error = ref<string | null>(null)
 
@@ -45,17 +69,30 @@ onMounted(refresh)
 
 async function refresh(): Promise<void> {
   try {
-    const [u, f, s] = await Promise.all([
+    const [u, f, s, a] = await Promise.all([
       api.get<{ users: UserRow[] }>('/api/admin/users'),
       api.get<{ flags: FlagRow[] }>('/api/admin/flags'),
       api.get<StatusRow>('/api/admin/status'),
+      api.get<AnalyticsRow>('/api/admin/analytics'),
     ])
     users.value = u.users
     flags.value = f.flags
     status.value = s
+    analytics.value = a
   } catch (e) {
     error.value = (e as Error).message
   }
+}
+
+/** Formate un dictionnaire {clé: n} en « clé n · clé n », ou un tiret si vide. */
+function summarizeTally(tally: Record<string, number>): string {
+  const entries = Object.entries(tally)
+  if (entries.length === 0) return '—'
+  return entries.map(([key, value]) => `${key} ${value}`).join(' · ')
+}
+
+function shortDate(value: string | null): string {
+  return value ? new Date(value).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' }) : '—'
 }
 
 function flash(text: string): void {
@@ -210,6 +247,87 @@ function clearCache(): void {
         >
           Vider le cache
         </button>
+      </div>
+    </section>
+
+    <!-- Parcours (analytics maison, nominatif — comptes admin exclus) -->
+    <section v-if="analytics" class="rounded-xl border border-line bg-surface p-5">
+      <div class="mb-3 flex items-baseline justify-between gap-2">
+        <h2 class="text-sm font-semibold uppercase tracking-wide text-muted">Parcours</h2>
+        <span class="text-xs text-faint">{{ analytics.windowDays }} derniers jours · admins exclus</span>
+      </div>
+
+      <!-- Funnel d'inscription -->
+      <div class="mb-4">
+        <p class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-faint">Inscription</p>
+        <div class="flex flex-wrap items-center gap-2 text-sm">
+          <span class="rounded-lg bg-surface-2 px-2.5 py-1 text-muted">
+            page vue <strong class="text-text">{{ analytics.registration.pageViews }}</strong>
+          </span>
+          <span aria-hidden="true" class="text-faint">→</span>
+          <span class="rounded-lg bg-surface-2 px-2.5 py-1 text-muted">
+            formulaire soumis <strong class="text-text">{{ analytics.registration.submitted }}</strong>
+          </span>
+          <span aria-hidden="true" class="text-faint">→</span>
+          <span class="rounded-lg bg-accent-soft px-2.5 py-1 text-accent">
+            compte créé <strong>{{ analytics.registration.success }}</strong>
+          </span>
+        </div>
+        <p
+          v-if="Object.keys(analytics.registration.errors).length"
+          class="mt-1.5 text-xs text-muted"
+        >
+          Échecs : {{ summarizeTally(analytics.registration.errors) }}
+        </p>
+      </div>
+
+      <!-- Activation, ajout, recherche -->
+      <div class="grid grid-cols-1 gap-2 text-sm sm:grid-cols-3">
+        <p class="text-muted">
+          Activés :
+          <strong class="text-text">{{ analytics.activation.activatedUsers }}</strong> /
+          {{ analytics.activation.totalUsers }}
+          <span class="text-faint">(≥1 bouteille)</span>
+        </p>
+        <p class="text-muted">
+          Voies d'ajout : <strong class="text-text">{{ summarizeTally(analytics.add.methods) }}</strong>
+        </p>
+        <p class="text-muted">
+          Recherches : <strong class="text-text">{{ analytics.search.performed }}</strong>
+          <span class="text-faint">· sommelier {{ analytics.search.sommelier }}</span>
+        </p>
+      </div>
+
+      <!-- Table nominative : qui a fait quoi -->
+      <div v-if="analytics.users.length" class="mt-4 overflow-x-auto">
+        <table class="w-full text-left text-sm">
+          <thead>
+            <tr class="border-b border-line text-xs uppercase tracking-wide text-faint">
+              <th class="py-1.5 pr-3 font-medium">Utilisateur</th>
+              <th class="py-1.5 pr-3 font-medium">Inscrit</th>
+              <th class="py-1.5 pr-3 font-medium">Vu</th>
+              <th class="py-1.5 pr-3 font-medium">Conn.</th>
+              <th class="py-1.5 pr-3 font-medium">Btl.</th>
+              <th class="py-1.5 font-medium">Activé</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="u in analytics.users" :key="u.id" class="border-b border-line/60">
+              <td class="py-1.5 pr-3">
+                <span class="text-text">{{ u.name }}</span>
+              </td>
+              <td class="py-1.5 pr-3 text-muted">{{ shortDate(u.createdAt) }}</td>
+              <td class="py-1.5 pr-3 text-muted">{{ shortDate(u.lastLoginAt) }}</td>
+              <td class="py-1.5 pr-3 text-muted">{{ u.logins }}</td>
+              <td class="py-1.5 pr-3 text-muted">{{ u.bottles }}</td>
+              <td class="py-1.5">
+                <span :class="u.activated ? 'text-success' : 'text-faint'">
+                  {{ u.activated ? 'oui' : 'non' }}
+                </span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </section>
 

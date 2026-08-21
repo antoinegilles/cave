@@ -11,6 +11,7 @@ import {
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import BottomSheet from '../components/BottomSheet.vue'
+import { track } from '../lib/analytics'
 import { ApiError, api } from '../lib/api'
 import { prepareImage } from '../lib/image'
 import { parseSlotSelection } from '../lib/slotSelection'
@@ -219,6 +220,7 @@ async function onPhotoSelected(event: Event): Promise<void> {
   const file = (event.target as HTMLInputElement).files?.[0]
   if (!file) return
 
+  track('add_method_selected', { method: 'photo' })
   loading.value = true
   loadingLabel.value = 'Lecture de l’étiquette…'
   error.value = null
@@ -247,6 +249,7 @@ async function onPhotoSelected(event: Event): Promise<void> {
 
 async function searchByName(): Promise<void> {
   if (manualQuery.value.trim().length < 2) return
+  track('add_method_selected', { method: 'manual' })
   loading.value = true
   loadingLabel.value = 'Recherche…'
   error.value = null
@@ -285,6 +288,7 @@ async function lookupBarcode(): Promise<void> {
     error.value = 'Un code-barres comporte 8 à 14 chiffres.'
     return
   }
+  track('add_method_selected', { method: 'barcode' })
   loading.value = true
   loadingLabel.value = 'Recherche du code-barres…'
   error.value = null
@@ -298,6 +302,7 @@ async function lookupBarcode(): Promise<void> {
 }
 
 function startManual(): void {
+  track('add_method_selected', { method: 'manual' })
   wine.value = {
     id: '',
     name: '',

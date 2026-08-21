@@ -81,6 +81,19 @@ marginal.
 Sans `GEMINI_API_KEY`, l'app fonctionne toujours : saisie manuelle, recherche par nom et
 recherche classique. Seuls le scan photo et le sommelier sont indisponibles.
 
+### Sur le traçage des parcours
+
+Un traçage produit **maison, first-party, sans aucun tiers** : les événements de parcours
+(inscription, activation, ajout, recherche) sont écrits dans une table `Event` de la base et
+analysés depuis la page Admin. C'est **nominatif** — l'intérêt à cette échelle est de voir le
+parcours réel de chaque compte, pas des statistiques anonymes. Trois garde-fous :
+
+1. **Coupe-circuit** `ANALYTICS_ENABLED` (défaut activé) : à `false`, plus rien n'est écrit.
+2. **Comptes admin exclus** : la navigation d'un administrateur ne pollue pas les stats.
+3. **Non bloquant et minimal** : un échec de traçage est silencieux (jamais dans le chemin
+   d'une action), et les données restent sobres (nom d'écran, pas de contenu ni de PII).
+   Supprimer un compte efface sa trace (relation en cascade).
+
 ---
 
 ## Démarrage local

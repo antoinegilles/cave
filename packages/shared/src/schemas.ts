@@ -2,6 +2,7 @@ import { z } from 'zod'
 import {
   AI_PROMPT_MAX_LENGTH,
   BOTTLE_STATUSES,
+  EVENT_NAMES,
   RACK_NUMBERINGS,
   WINE_COLORS,
   WINE_SOURCES,
@@ -80,6 +81,9 @@ export const registerSchema = z.object({
   name: z.string().min(1, 'Prénom requis').max(80),
   password: z.string().min(10, 'Le mot de passe doit faire au moins 10 caractères').max(200),
   inviteCode: z.string().max(100).optional(),
+  // Id anonyme (localStorage) pour recoudre le funnel d'inscription : lie les pas anonymes
+  // (page vue, formulaire soumis) au compte créé. Purement analytique, sans effet fonctionnel.
+  anonId: z.string().max(64).optional(),
 })
 export type RegisterInput = z.infer<typeof registerSchema>
 
@@ -420,3 +424,22 @@ export const labelExtractionSchema = z.object({
   country: z.string().max(80).nullable(),
 })
 export type LabelExtraction = z.infer<typeof labelExtractionSchema>
+
+/* ------------------------------------------------------------- analytics */
+
+export const eventNameSchema = z.enum(EVENT_NAMES)
+
+/** Un événement émis par le client. `props` bornées et non-PII ; l'identité vient du token. */
+export const clientEventSchema = z.object({
+  name: eventNameSchema,
+  props: z.record(z.union([z.string().max(120), z.number(), z.boolean()])).optional(),
+  path: z.string().max(120).optional(),
+})
+export type ClientEventInput = z.infer<typeof clientEventSchema>
+
+/** Ingestion groupée : le client envoie ses événements par lots. Batch plafonné. */
+export const eventBatchSchema = z.object({
+  anonId: z.string().max(64).optional(),
+  events: z.array(clientEventSchema).min(1).max(20),
+})
+export type EventBatchInput = z.infer<typeof eventBatchSchema>

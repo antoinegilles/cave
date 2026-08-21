@@ -56,6 +56,9 @@ const envSchema = z.object({
   SERVE_STATIC: boolEnv(true),
   STATIC_DIR: z.string().default('./public'),
   CORS_ORIGIN: z.string().optional(),
+
+  /** Traçage produit (table Event). Coupe-circuit : à false, plus aucun événement n'est écrit. */
+  ANALYTICS_ENABLED: boolEnv(true),
 })
 
 const parsed = envSchema.safeParse(process.env)

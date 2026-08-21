@@ -46,6 +46,9 @@ const showChrome = computed(() => auth.isAuthenticated && !route.meta['public'])
 // (titre, avatar, chiffres). Elle reste sur bureau et sur toutes les autres routes.
 const hideTopBarOnMobile = computed(() => route.name === 'cellar')
 
+// La page d'accueil gère sa propre mise en page pleine largeur (sections immersives).
+const isLanding = computed(() => route.name === 'landing')
+
 interface NavItem {
   name: string
   label: string
@@ -231,13 +234,17 @@ async function updateApplication(): Promise<void> {
 
     <main
       id="contenu"
-      class="mx-auto max-w-5xl px-3 sm:px-4"
-      :class="[
-        showChrome ? 'pb-28 md:pb-10' : 'pb-7',
-        // Sur téléphone dans « Ma cave », le hero démarre en haut (il gère l'encoche lui-même) ;
-        // ailleurs, padding vertical normal.
-        hideTopBarOnMobile ? 'pt-0 md:pt-7' : 'pt-5 sm:pt-7',
-      ]"
+      :class="
+        isLanding
+          ? ''
+          : [
+              'mx-auto max-w-5xl px-3 sm:px-4',
+              showChrome ? 'pb-28 md:pb-10' : 'pb-7',
+              // Sur téléphone dans « Ma cave », le hero démarre en haut (il gère l'encoche
+              // lui-même) ; ailleurs, padding vertical normal.
+              hideTopBarOnMobile ? 'pt-0 md:pt-7' : 'pt-5 sm:pt-7',
+            ]
+      "
     >
       <RouterView :key="`${String(route.name)}:${cellar.viewingUser?.id ?? 'self'}`" />
     </main>

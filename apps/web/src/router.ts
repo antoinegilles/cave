@@ -8,6 +8,7 @@ import { useCellarStore } from './stores/cellar'
 const router = createRouter({
   history: createWebHistory(),
   routes: [
+    { path: '/bienvenue', name: 'landing', component: () => import('./views/LandingView.vue'), meta: { public: true } },
     { path: '/login', name: 'login', component: () => import('./views/LoginView.vue'), meta: { public: true } },
     { path: '/inscription', name: 'register', component: () => import('./views/RegisterView.vue'), meta: { public: true } },
     { path: '/', name: 'cellar', component: () => import('./views/CellarView.vue') },
@@ -42,7 +43,9 @@ router.beforeEach(async (to) => {
   const cellar = useCellarStore()
 
   if (!to.meta['public'] && !auth.isAuthenticated) {
-    return { name: 'login', query: { redirect: to.fullPath } }
+    // Un visiteur non connecté découvre d'abord la page d'accueil (et non l'écran de
+    // connexion). La cible initiale est conservée pour l'y ramener après connexion.
+    return { name: 'landing', query: to.fullPath !== '/' ? { redirect: to.fullPath } : {} }
   }
   if (to.meta['public'] && auth.isAuthenticated) {
     return { name: 'cellar' }

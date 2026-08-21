@@ -26,7 +26,7 @@ const ownerName = computed(() => cellar.viewingUser?.name ?? auth.user?.name ?? 
 
 <template>
   <section
-    class="relative -mx-3 overflow-hidden rounded-b-3xl px-5 pb-5 text-white shadow-float sm:-mx-4 md:mx-0 md:rounded-3xl"
+    class="relative -mx-3 rounded-b-3xl px-5 pb-5 text-white shadow-float sm:-mx-4 md:mx-0 md:rounded-3xl"
     style="
       padding-top: max(env(safe-area-inset-top), 1.5rem);
       background-image: linear-gradient(
